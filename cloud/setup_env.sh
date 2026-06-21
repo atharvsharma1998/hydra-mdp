@@ -34,7 +34,9 @@ echo "=== 2. mmcv-full 1.4.0 (prebuilt for torch1.10/cu113) ==="
   -f https://download.openmmlab.com/mmcv/dist/cu113/torch1.10/index.html
 
 echo "=== 3. pinned third-party deps (frozen, minus torch/mmcv/editables/trt) ==="
-"$PY" -m pip install -r "$REQ"
+# --no-deps: the frozen file is a full dependency closure, so install exact pins
+# and skip the resolver (avoids false conflicts like aiobotocore vs botocore).
+"$PY" -m pip install --no-deps -r "$REQ"
 
 echo "=== 4. nuplan-devkit (editable) ==="
 if [ ! -d "$NUPLAN_SRC" ]; then
