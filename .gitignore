@@ -1,0 +1,53 @@
+# python
+*.pyc
+**/__pycache__/
+.pytest_cache/*
+.pydevproject
+
+# IDE
+.vscode/*
+
+# Pip
+*.egg-info
+
+# files
+*.log
+*.pkl
+*.jpg
+*.pcd
+
+# exp
+exp
+
+# data
+dataset
+
+# lsf
+*.bsub
+
+# running scripts
+scripts_dev/*
+
+# --- GTRS-BEVFusion additions: never commit data / weights / caches ---
+navsim_workspace/
+**/navsim_workspace/
+trainval_sensor_blobs/
+mini_sensor_blobs/
+*_navsim_logs/
+maps/
+teacher_scores_cache/
+metric_cache/
+checkpoints/
+runs/
+logs/
+eval_results/
+# model weights / build / run artifacts
+*.pth
+*.ckpt
+*.onnx
+*.engine
+*.out
+wandb/
+# keep the trajectory vocabulary (small, required at runtime):
+!traj_final/
+!traj_final/*.npy

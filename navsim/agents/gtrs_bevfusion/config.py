@@ -1,0 +1,93 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Config for the GTRS-BEVFusion agent.
+
+This agent replaces ``ModularPlanner``'s placeholder perception (a ResNet18
+over a GT-rasterized ``bev_grid``) with a real BEVFusion-style fused
+camera+LiDAR BEV backbone that emits ``F_env`` features. Those feed:
+
+  * the existing HydraMDP ``PlanningHead``  -> planning (PDM distill + imitation)
+  * a detection head (Transfuser-style)     -> agent_states / agent_labels
+  * a BEV segmentation head (cross-entropy)  -> map (viz / debug)
+
+Geometry is tuned to NAVSIM ego-frame ranges (not nuScenes). The fused-BEV
+perception modules come from the CUDA-BEVFusion mmdet3d fork, which is on the
+PYTHONPATH in the unified environment.
+"""
+from dataclasses import dataclass, field
+from typing import List, Tuple
+
+
+@dataclass
+class GTRSBevfusionConfig:
+    # ---------------- planner head (HydraMDP decoder; mirrors ModularPlanner) -------------
+    vocab_path: str = "traj_final/8192.npy"
+    d_model: int = 256
+    d_ffn: int = 512
+    nhead: int = 4
+    nlayers: int = 2
+    num_poses: int = 40
+    num_ego_status: int = 3            # status_feature = num_ego_status * 8
+    env_token_grid: Tuple[int, int] = (32, 32)   # PlanningHead bev_spatial_shape (1024 tokens)
+    vocab_dropout_size: int = 2048
+
+    # ---------------- which auxiliary heads are active -----------------
+    use_detection_head: bool = True
+    use_bev_seg_head: bool = True
+
+    # ---------------- camera inputs (per-camera, for LSS view transform) ---------------
+    camera_names: Tuple[str, ...] = ("cam_l0", "cam_f0", "cam_r0")
+    image_size: Tuple[int, int] = (256, 704)     # (H, W) fed to image backbone
+    img_norm_mean: Tuple[float, float, float] = (0.485, 0.456, 0.406)
+    img_norm_std: Tuple[float, float, float] = (0.229, 0.224, 0.225)
+
+    # ---------------- LiDAR / voxelization (ego frame) -----------------
+    # Geometry is internally consistent so the camera-LSS BEV and the LiDAR
+    # SparseEncoder BEV land on the SAME grid (required by ConvFuser concat):
+    #   lidar BEV = (2*R)/voxel/8   = 64/0.08/8 = 100
+    #   cam   BEV = (2*R)/xbound/ds = 64/0.32/2 = 100
+    #   sparse_shape_xy = (2*R)/voxel = 800 ; z = (z_ext/0.2)+1 = 41
+    # => fused/F_env spatial = 100x100, channels 512.
+    point_cloud_range: Tuple[float, ...] = (-32.0, -32.0, -3.0, 32.0, 32.0, 5.0)
+    voxel_size: Tuple[float, float, float] = (0.08, 0.08, 0.2)
+    sparse_shape: Tuple[int, int, int] = (800, 800, 41)
+    max_points_per_voxel: int = 10
+    max_voxels: Tuple[int, int] = (90000, 120000)
+    lidar_in_channels: int = 5        # x, y, z, intensity, t
+
+    # ---------------- camera BEV (LSS) grid; XY matches point_cloud_range ---------------
+    lss_xbound: Tuple[float, float, float] = (-32.0, 32.0, 0.32)
+    lss_ybound: Tuple[float, float, float] = (-32.0, 32.0, 0.32)
+    lss_zbound: Tuple[float, float, float] = (-10.0, 10.0, 20.0)
+    lss_dbound: Tuple[float, float, float] = (1.0, 60.0, 0.5)
+    camera_out_channels: int = 80
+    lss_downsample: int = 2
+
+    # ---------------- fuser / shared BEV decoder -----------------
+    fuser_out_channels: int = 256
+    fused_bev_channels: int = 512     # SECONDFPN concat -> F_env channels
+    fused_bev_size: int = 100         # F_env spatial H=W (informational)
+
+    # ---------------- detection head -----------------
+    num_bounding_boxes: int = 30
+    det_range: float = 32.0           # +/- meters used to filter/scale boxes
+    latent: bool = False              # consumed by reused transfuser _agent_loss
+
+    # ---------------- bev segmentation head (NAVSIM single-label CE) ---------------
+    num_bev_classes: int = 7          # 0=background + 6 NAVSIM classes
+    bev_seg_frame: Tuple[int, int] = (128, 256)   # (H, W) of bev_semantic_map GT
+    # Per-class CE weights (idx 0=bg ... 6); rare classes (centerline, peds,
+    # static) up-weighted. Calibrate against real class frequencies after the
+    # first data pass.
+    bev_class_weights: Tuple[float, ...] = (1.0, 1.0, 2.0, 2.0, 3.0, 1.0, 3.0)
+    lovasz_loss_weight: float = 0.5
+
+    # ---------------- loss weights -----------------
+    trajectory_imi_weight: float = 1.0
+    trajectory_distill_weight: float = 1.0
+    agent_class_weight: float = 10.0
+    agent_box_weight: float = 1.0
+    bev_semantic_weight: float = 10.0
+
+    def __post_init__(self):
+        if self.fused_bev_channels <= 0:
+            raise ValueError("fused_bev_channels must be > 0")
