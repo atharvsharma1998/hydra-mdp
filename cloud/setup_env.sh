@@ -43,7 +43,9 @@ if [ ! -d "$NUPLAN_SRC" ]; then
   git clone https://github.com/motional/nuplan-devkit.git "$NUPLAN_SRC"
   git -C "$NUPLAN_SRC" checkout e9241677997dd86bfc0bcd44817ab04fe631405b || true
 fi
-"$PY" -m pip install -e "$NUPLAN_SRC" --no-deps
+# --ignore-requires-python: nuplan-devkit declares Requires-Python>=3.9 but runs
+# fine on 3.8 (our whole cu113 wheel stack is cp38, so we stay on 3.8).
+"$PY" -m pip install -e "$NUPLAN_SRC" --no-deps --ignore-requires-python
 
 echo "=== 5. mmdet3d fork (bev-inference) + navsim (hydra-mdp), editable ==="
 "$PY" -m pip install -e "$BEVFUSION_ROOT" --no-deps
