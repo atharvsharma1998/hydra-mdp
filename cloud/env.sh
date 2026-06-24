@@ -31,6 +31,9 @@ export PYTHONPATH="$NAVSIM_REPO:$BEVFUSION_ROOT:${PYTHONPATH:-}"
 export TRAINVAL_LOGS="$NAVSIM_WS/trainval_navsim_logs/trainval"
 export TRAINVAL_SENSORS="$NAVSIM_WS/trainval_sensor_blobs/trainval"
 export TEACHER_CACHE="$NAVSIM_WS/teacher_scores_cache"
+# GTRS released teacher scores: one big pickle {token: {metric: (8192,)}}.
+# Loaded once in the trainer main process (matches GTRS); no per-token convert.
+export TEACHER_PKL="${TEACHER_PKL:-$NAVSIM_WS/navtrain_8192.pkl}"
 export CKPT_DIR="$NAVSIM_WS/checkpoints"
 
 echo "[env] NAVSIM_REPO     = $NAVSIM_REPO"

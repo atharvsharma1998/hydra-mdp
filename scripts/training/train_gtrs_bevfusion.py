@@ -9,6 +9,13 @@ Example (local overfit smoke):
         --workspace ./navsim_workspace \
         --sensor-blobs-path ./navsim_workspace/openscene-v1.1/sensor_blobs/mini \
         --num-scenes 32 --epochs 60 --batch-size 2
+
+Teacher scores (PDM distillation): two options
+  * --teacher-pkl  : GTRS-style single big pickle {token: {metric: (8192,)}},
+                     loaded ONCE in the main process and indexed by token in the
+                     training loop (DataLoader workers stay light). Preferred.
+  * --teacher-cache-path : legacy dir of per-token <token>.pkl files (read in
+                     the Dataset workers).
 """
 import os
 import argparse
@@ -24,9 +31,22 @@ if __name__ == "__main__" or "NUPLAN_MAPS_ROOT" not in os.environ:
         os.environ["NUPLAN_MAPS_ROOT"] = str(Path(_args.maps_path) if _args.maps_path else _ws / "maps")
 
 import pickle
+import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+
+# PDM metric heads that receive distillation targets (must exist in both the
+# planning head preds and the teacher score dict). 'imi' is computed separately.
+DISTILL_METRICS = [
+    "no_at_fault_collisions",
+    "drivable_area_compliance",
+    "time_to_collision_within_bound",
+    "ego_progress",
+    "driving_direction_compliance",
+    "lane_keeping",
+    "traffic_light_compliance",
+]
 
 from navsim.common.dataclasses import SensorConfig, Scene, SceneFilter
 from navsim.agents.gtrs_bevfusion.config import GTRSBevfusionConfig
@@ -42,9 +62,11 @@ from train_modular_planner import LazySceneLoader
 
 
 class BevfusionDataset(Dataset):
-    def __init__(self, scene_loader, cache_path, config: GTRSBevfusionConfig, trajectory_sampling):
+    def __init__(self, scene_loader, cache_path, config: GTRSBevfusionConfig, trajectory_sampling,
+                 big_pkl_mode: bool = False):
         self.scene_loader = scene_loader
         self.cache_path = cache_path
+        self.big_pkl_mode = big_pkl_mode  # if True, teacher scores are injected in the train loop
         self.feature_builder = BEVFusionFeatureBuilder(config)
         self.target_builder = TransfuserTargetBuilder(
             trajectory_sampling=trajectory_sampling, config=TransfuserConfig()
@@ -60,15 +82,19 @@ class BevfusionDataset(Dataset):
 
         features = self.feature_builder.compute_features(agent_input)
         targets = self.target_builder.compute_targets(scene)
+        targets["token"] = token  # for teacher-score lookup (legacy cache or big pkl)
 
-        cache_file = self.cache_path / f"{token}.pkl"
-        if cache_file.exists():
-            try:
-                with open(cache_file, "rb") as f:
-                    teacher_scores = pickle.load(f)
-                targets["gt_scores"] = {k: torch.tensor(v, dtype=torch.float32) for k, v in teacher_scores.items()}
-            except Exception:
-                pass
+        # Legacy per-token cache path. In big-pkl mode the scores are looked up
+        # once in the main process (avoids holding the ~30 GB dict per worker).
+        if not self.big_pkl_mode:
+            cache_file = self.cache_path / f"{token}.pkl"
+            if cache_file.exists():
+                try:
+                    with open(cache_file, "rb") as f:
+                        teacher_scores = pickle.load(f)
+                    targets["gt_scores"] = {k: torch.tensor(v, dtype=torch.float32) for k, v in teacher_scores.items()}
+                except Exception:
+                    pass
         return features, targets
 
 
@@ -84,7 +110,11 @@ def main():
     parser.add_argument("--maps-path", type=str, default=None)
     parser.add_argument("--sensor-blobs-path", type=str, default=None,
                         help="dir containing <log>/CAM_*/*.jpg (e.g. .../sensor_blobs/mini)")
-    parser.add_argument("--teacher-cache-path", type=str, default=None)
+    parser.add_argument("--teacher-cache-path", type=str, default=None,
+                        help="legacy: dir of per-token <token>.pkl score files")
+    parser.add_argument("--teacher-pkl", type=str, default=None,
+                        help="GTRS-style single big pickle (e.g. navtrain_8192.pkl) "
+                             "mapping token -> {metric: (8192,) scores}; loaded once in main process")
     parser.add_argument("--num-scenes", type=int, default=32, help="overfit subset size (0 = all)")
     parser.add_argument("--epochs", type=int, default=60)
     parser.add_argument("--batch-size", type=int, default=2)
@@ -114,6 +144,16 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device} | sensor blobs: {sensor_blobs_path}")
 
+    # GTRS-style teacher scores: load the single big pickle ONCE in the main
+    # process. Token lookup happens in the train loop so DataLoader workers
+    # never receive a copy of this ~30 GB dict.
+    teacher_full = None
+    if args.teacher_pkl:
+        print(f"Loading teacher scores (big pkl): {args.teacher_pkl} ...", flush=True)
+        with open(args.teacher_pkl, "rb") as f:
+            teacher_full = pickle.load(f)
+        print(f"  loaded teacher scores for {len(teacher_full)} tokens", flush=True)
+
     config = GTRSBevfusionConfig()
     trajectory_sampling = __import__("nuplan.planning.simulation.trajectory.trajectory_sampling",
                                      fromlist=["TrajectorySampling"]).TrajectorySampling(
@@ -134,13 +174,21 @@ def main():
     tokens = [t for t in scene_loader.tokens
               if _log_has_sensors(sensor_blobs_path, scene_loader.token_to_slice[t][0].name.replace(".pkl", ""))]
     print(f"Tokens with downloaded sensors: {len(tokens)} / {len(scene_loader.tokens)}")
+
+    # align to tokens that actually have teacher scores in the big pkl
+    if teacher_full is not None:
+        before = len(tokens)
+        tokens = [t for t in tokens if t in teacher_full]
+        print(f"Tokens with teacher scores: {len(tokens)} / {before}")
+
     if args.num_scenes > 0:
         tokens = tokens[: args.num_scenes]
     scene_loader.token_to_slice = {t: scene_loader.token_to_slice[t] for t in tokens}
     scene_loader.tokens_list = tokens
     print(f"Overfit subset: {len(tokens)} scenes")
 
-    dataset = BevfusionDataset(scene_loader, cache_path, config, trajectory_sampling)
+    dataset = BevfusionDataset(scene_loader, cache_path, config, trajectory_sampling,
+                               big_pkl_mode=teacher_full is not None)
     loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
                         num_workers=args.num_workers, collate_fn=bevfusion_collate, pin_memory=True)
 
@@ -190,11 +238,22 @@ def main():
                 for k, v in tgts.items()}
         return feats, tgts
 
+    def build_gt_scores(tokens):
+        """Index the big teacher pkl for a batch of tokens -> {metric: (B, 8192)}."""
+        gt = {}
+        for m in DISTILL_METRICS:
+            arr = np.stack([np.asarray(teacher_full[t][m], dtype=np.float32) for t in tokens], axis=0)
+            gt[m] = torch.from_numpy(arr).to(device)
+        return gt
+
     for epoch in range(start_epoch, args.epochs):
         torch.cuda.empty_cache()
         agg = {}
         for feats, tgts in tqdm(loader, desc=f"Epoch {epoch+1}/{args.epochs}"):
+            batch_tokens = tgts.pop("token", None)  # list[str]; not a tensor
             feats, tgts = to_dev(feats, tgts)
+            if teacher_full is not None and batch_tokens is not None:
+                tgts["gt_scores"] = build_gt_scores(batch_tokens)
             optimizer.zero_grad()
             with torch.cuda.amp.autocast(enabled=args.amp):
                 preds = model(feats)

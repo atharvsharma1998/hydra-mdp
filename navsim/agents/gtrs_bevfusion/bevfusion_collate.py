@@ -37,6 +37,10 @@ def bevfusion_collate(
             for sk in targets_list[0]["gt_scores"].keys():
                 gt_scores[sk] = torch.stack([t["gt_scores"][sk] for t in targets_list], dim=0)
             targets[key] = gt_scores
+        elif key == "token":
+            # per-sample token string; used to look up teacher scores in the
+            # training loop (GTRS-style single big-pkl indexing). Keep as a list.
+            targets[key] = [t["token"] for t in targets_list]
         else:
             targets[key] = torch.stack([t[key] for t in targets_list], dim=0)
 

@@ -1,15 +1,19 @@
 """Use GTRS's released teacher scores (navtrain_8192.pkl) instead of recomputing.
 
 GTRS ships one big dict {token: {sub_score: (8192,) array, ...}} scored against
-traj_final/8192.npy. Our trainer reads one pkl per token from a cache dir. This
-tool (a) VERIFIES the released scores were computed against the same vocab as
-ours, and (b) CONVERTS the big pkl into the per-token cache the trainer expects.
+traj_final/8192.npy.
+
+The trainer now loads this big pkl DIRECTLY (GTRS-style) via
+`train_gtrs_bevfusion.py --teacher-pkl navtrain_8192.pkl` — no conversion needed.
+This tool remains useful to:
+  (a) VERIFY the released scores were computed against the same vocab as ours, and
+  (b) optionally CONVERT into a per-token cache (legacy --teacher-cache-path mode).
 
 Verify (compare against a few self-generated scores):
     python cloud/teacher_scores_from_gtrs.py verify \
         --gtrs-pkl navtrain_8192.pkl --self-cache <dir of self-generated <token>.pkl>
 
-Convert (split into per-token cache the trainer loads):
+Convert (optional; only for legacy per-token cache mode):
     python cloud/teacher_scores_from_gtrs.py convert \
         --gtrs-pkl navtrain_8192.pkl --output-dir $NAVSIM_WS/teacher_scores_cache
 """

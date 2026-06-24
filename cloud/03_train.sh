@@ -26,11 +26,14 @@ STAMP=$(date +%Y%m%d_%H%M%S)
 LOG="$NAVSIM_WS/logs/${RUN_NAME}_${STAMP}.log"
 echo "logging to $LOG"
 
+[ -f "$TEACHER_PKL" ] || { echo "ERROR: teacher pkl not found: $TEACHER_PKL"; exit 1; }
+echo "teacher scores (big pkl): $TEACHER_PKL"
+
 nohup "$PYTHON" scripts/training/train_gtrs_bevfusion.py \
   --workspace "$NAVSIM_WS" \
   --maps-path "$NUPLAN_MAPS_ROOT" \
   --sensor-blobs-path "$TRAINVAL_SENSORS" \
-  --teacher-cache-path "$TEACHER_CACHE" \
+  --teacher-pkl "$TEACHER_PKL" \
   --num-scenes 0 \
   --epochs "$EPOCHS" \
   --batch-size "$BATCH" \
