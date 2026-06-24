@@ -193,6 +193,13 @@ def main():
         default=None,
         help="Path to output teacher scores cache directory (defaults to <workspace>/teacher_scores_cache)",
     )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=0,
+        help="Worker processes (0 = auto = min(10, cpu_count())). Set to your pod's vCPU count; "
+        "cpu_count() reports the HOST cores inside containers, which oversubscribes small pods.",
+    )
     args = parser.parse_args()
 
     print("=== Precomputing Hydra-MDP Teacher Scores (Multiprocessing) ===")
@@ -247,8 +254,8 @@ def main():
             
     print(f"Found {len(worker_args)} scenes.")
     
-    num_workers = min(10, cpu_count())
-    print(f"Starting multiprocessing pool with {num_workers} workers...")
+    num_workers = args.num_workers if args.num_workers > 0 else min(10, cpu_count())
+    print(f"Starting multiprocessing pool with {num_workers} workers (cpu_count={cpu_count()})...")
     
     init_args = (str(maps_path), str(vocab_path), str(output_cache_path))
     

@@ -10,11 +10,16 @@ source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 mkdir -p "$TEACHER_CACHE"
 cd "$NAVSIM_REPO"
 
-echo "=== precomputing teacher scores -> $TEACHER_CACHE ==="
+# Default workers to the pod's REAL allocated vCPUs (nproc honors cgroup limits,
+# unlike Python's cpu_count() which sees host cores). Override with WORKERS=N.
+WORKERS="${WORKERS:-$(nproc)}"
+
+echo "=== precomputing teacher scores -> $TEACHER_CACHE (workers=$WORKERS) ==="
 "$PYTHON" scripts/training/precompute_teacher_scores.py \
   --workspace "$NAVSIM_WS" \
   --maps-path "$NUPLAN_MAPS_ROOT" \
   --vocab-path "$NAVSIM_REPO/traj_final/8192.npy" \
-  --output-path "$TEACHER_CACHE"
+  --output-path "$TEACHER_CACHE" \
+  --num-workers "$WORKERS"
 
 echo "=== teacher cache now holds $(ls "$TEACHER_CACHE" | wc -l) pkl files ==="
