@@ -196,9 +196,16 @@ def main():
     parser.add_argument(
         "--num-workers",
         type=int,
-        default=0,
-        help="Worker processes (0 = auto = min(10, cpu_count())). Set to your pod's vCPU count; "
-        "cpu_count() reports the HOST cores inside containers, which oversubscribes small pods.",
+        default=int(os.environ.get("TEACHER_WORKERS", "0")) or None,
+        help="Worker processes (default: all CPU cores). PDM scoring is CPU-parallel.",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=0,
+        help="Only score the first N scenes (for quick verification runs; 0 = all).",
+    )
+    parser.add_argument(
+        "--sensor-blobs-path", type=str, default=None,
+        help="If set, only score tokens whose log has downloaded sensors (i.e. navtrain).",
     )
     args = parser.parse_args()
 
@@ -253,8 +260,27 @@ def main():
             print(f"Error scanning {log_pickle_path}: {e}")
             
     print(f"Found {len(worker_args)} scenes.")
-    
-    num_workers = args.num_workers if args.num_workers > 0 else min(10, cpu_count())
+
+    # Only score navtrain tokens (logs whose sensor blobs are downloaded). This
+    # both cuts compute (navtrain << trainval) and keeps the cache aligned with
+    # what training actually consumes.
+    if args.sensor_blobs_path:
+        sb = Path(args.sensor_blobs_path)
+        logs_with_sensors = {
+            d.name for d in sb.iterdir()
+            if (d / "CAM_F0").is_dir() and (d / "MergedPointCloud").is_dir()
+        }
+        before = len(worker_args)
+        worker_args = [w for w in worker_args if Path(w[1]).stem in logs_with_sensors]
+        print(f"Sensor filter: {len(worker_args)}/{before} scenes in navtrain logs "
+              f"({len(logs_with_sensors)} logs with sensors).")
+
+    if args.limit and args.limit > 0:
+        worker_args = worker_args[: args.limit]
+        print(f"Limit: scoring only first {len(worker_args)} scenes.")
+
+    num_workers = args.num_workers if args.num_workers else cpu_count()
+    num_workers = max(1, min(num_workers, cpu_count()))
     print(f"Starting multiprocessing pool with {num_workers} workers (cpu_count={cpu_count()})...")
     
     init_args = (str(maps_path), str(vocab_path), str(output_cache_path))
