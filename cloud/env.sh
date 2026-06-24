@@ -16,7 +16,11 @@ export NAVSIM_WS="${NAVSIM_WS:-/workspace/navsim_workspace}"
 
 # CUDA-BEVFusion mmdet3d fork that provides ConvFuser / DepthLSSTransform /
 # SparseEncoder. Must be importable; backbone reads BEVFUSION_ROOT.
-export BEVFUSION_ROOT="${BEVFUSION_ROOT:-/workspace/Lidar_AI_Solution/CUDA-BEVFusion/bevfusion}"
+export BEVFUSION_ROOT="${BEVFUSION_ROOT:-/workspace/bev-inference/CUDA-BEVFusion/bevfusion}"
+
+# nuplan-devkit source (editable). On the Debian system Python the `setup.py
+# develop` link doesn't always land on sys.path, so we add it to PYTHONPATH.
+export NUPLAN_SRC="${NUPLAN_SRC:-/workspace/nuplan-devkit}"
 
 # Python interpreter from the unified env (torch 1.10 + mmdet3d/spconv + navsim).
 export PYTHON="${PYTHON:-python}"
@@ -25,7 +29,7 @@ export PYTHON="${PYTHON:-python}"
 export NUPLAN_MAPS_ROOT="${NUPLAN_MAPS_ROOT:-$NAVSIM_WS/maps}"
 export OPENSCENE_DATA_ROOT="${OPENSCENE_DATA_ROOT:-$NAVSIM_WS}"
 export NAVSIM_EXP_ROOT="${NAVSIM_EXP_ROOT:-$NAVSIM_WS}"
-export PYTHONPATH="$NAVSIM_REPO:$BEVFUSION_ROOT:${PYTHONPATH:-}"
+export PYTHONPATH="$NAVSIM_REPO:$BEVFUSION_ROOT:$NUPLAN_SRC:${PYTHONPATH:-}"
 
 # data layout (NAVSIM standard)
 export TRAINVAL_LOGS="$NAVSIM_WS/trainval_navsim_logs/trainval"
