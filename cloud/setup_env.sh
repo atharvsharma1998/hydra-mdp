@@ -41,10 +41,14 @@ echo "=== 3. pinned third-party deps (frozen, minus torch/mmcv/editables/trt) ==
 echo "=== 4. nuplan-devkit (editable) ==="
 if [ ! -d "$NUPLAN_SRC" ]; then
   git clone https://github.com/motional/nuplan-devkit.git "$NUPLAN_SRC"
-  git -C "$NUPLAN_SRC" checkout e9241677997dd86bfc0bcd44817ab04fe631405b || true
 fi
-# --ignore-requires-python: nuplan-devkit declares Requires-Python>=3.9 but runs
-# fine on 3.8 (our whole cu113 wheel stack is cp38, so we stay on 3.8).
+git -C "$NUPLAN_SRC" checkout e9241677997dd86bfc0bcd44817ab04fe631405b || true
+# This commit uses Python 3.9 syntax (e.g. list[StateSE2]) that crashes on 3.8.
+# Apply our py38 patch (adds `from __future__ import annotations` + relaxes
+# python_requires). Reset tracked files first so re-runs apply cleanly.
+git -C "$NUPLAN_SRC" checkout -- . 2>/dev/null || true
+git -C "$NUPLAN_SRC" apply "$NAVSIM_REPO/cloud/patches/nuplan-devkit-py38.patch"
+# --ignore-requires-python: stay on 3.8 (our whole cu113 wheel stack is cp38).
 "$PY" -m pip install -e "$NUPLAN_SRC" --no-deps --ignore-requires-python
 
 echo "=== 5. mmdet3d fork (bev-inference) + navsim (hydra-mdp), editable ==="
