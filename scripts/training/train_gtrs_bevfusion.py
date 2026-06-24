@@ -33,7 +33,10 @@ if __name__ == "__main__" or "NUPLAN_MAPS_ROOT" not in os.environ:
 import pickle
 import numpy as np
 import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import Dataset, DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
 # PDM metric heads that receive distillation targets (must exist in both the
@@ -131,9 +134,29 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--log-file", type=str, default=None)
     parser.add_argument("--run-name", type=str, default="gtrs_bevfusion")
+    parser.add_argument("--no-find-unused-params", dest="find_unused_params",
+                        action="store_false", default=True,
+                        help="disable DDP find_unused_parameters (faster, but only safe if every "
+                             "param gets a grad every step; head/vocab selection usually doesn't)")
+    parser.add_argument("--no-sync-bn", dest="sync_bn", action="store_false", default=True,
+                        help="disable SyncBatchNorm conversion under DDP (BEVFusion backbone has "
+                             "many BN layers; syncing across GPUs helps with small per-GPU batch)")
     args = parser.parse_args()
 
-    torch.manual_seed(args.seed)
+    # ---- distributed (launched via torchrun); falls back to single-GPU ----
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    rank = int(os.environ.get("RANK", "0"))
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    ddp = world_size > 1
+    is_main = rank == 0
+    if ddp:
+        dist.init_process_group(backend="nccl", init_method="env://")
+        torch.cuda.set_device(local_rank)
+        device = torch.device("cuda", local_rank)
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    torch.manual_seed(args.seed + rank)
 
     ws = Path(args.workspace)
     maps_path = Path(args.maps_path) if args.maps_path else ws / "maps"
@@ -141,18 +164,21 @@ def main():
     sensor_blobs_path = Path(args.sensor_blobs_path) if args.sensor_blobs_path else ws / "mini_sensor_blobs" / "mini"
     ckpt_dir = ws / "checkpoints"; ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device} | sensor blobs: {sensor_blobs_path}")
+    if is_main:
+        print(f"Device: {device} | world_size: {world_size} | sensor blobs: {sensor_blobs_path}")
 
-    # GTRS-style teacher scores: load the single big pickle ONCE in the main
-    # process. Token lookup happens in the train loop so DataLoader workers
-    # never receive a copy of this ~30 GB dict.
+    # GTRS-style teacher scores: load the single big pickle ONCE per process.
+    # NOTE: under DDP each rank loads its own copy (~30 GB), so a 4-GPU node
+    # needs ~4x that in system RAM. Token lookup happens in the train loop so
+    # DataLoader workers never receive a copy.
     teacher_full = None
     if args.teacher_pkl:
-        print(f"Loading teacher scores (big pkl): {args.teacher_pkl} ...", flush=True)
+        if is_main:
+            print(f"Loading teacher scores (big pkl): {args.teacher_pkl} ...", flush=True)
         with open(args.teacher_pkl, "rb") as f:
             teacher_full = pickle.load(f)
-        print(f"  loaded teacher scores for {len(teacher_full)} tokens", flush=True)
+        if is_main:
+            print(f"  loaded teacher scores for {len(teacher_full)} tokens", flush=True)
 
     config = GTRSBevfusionConfig()
     trajectory_sampling = __import__("nuplan.planning.simulation.trajectory.trajectory_sampling",
@@ -173,26 +199,38 @@ def main():
     # keep only tokens whose log sensor folder is actually downloaded
     tokens = [t for t in scene_loader.tokens
               if _log_has_sensors(sensor_blobs_path, scene_loader.token_to_slice[t][0].name.replace(".pkl", ""))]
-    print(f"Tokens with downloaded sensors: {len(tokens)} / {len(scene_loader.tokens)}")
+    if is_main:
+        print(f"Tokens with downloaded sensors: {len(tokens)} / {len(scene_loader.tokens)}")
 
     # align to tokens that actually have teacher scores in the big pkl
     if teacher_full is not None:
         before = len(tokens)
         tokens = [t for t in tokens if t in teacher_full]
-        print(f"Tokens with teacher scores: {len(tokens)} / {before}")
+        if is_main:
+            print(f"Tokens with teacher scores: {len(tokens)} / {before}")
 
     if args.num_scenes > 0:
         tokens = tokens[: args.num_scenes]
     scene_loader.token_to_slice = {t: scene_loader.token_to_slice[t] for t in tokens}
     scene_loader.tokens_list = tokens
-    print(f"Overfit subset: {len(tokens)} scenes")
+    if is_main:
+        print(f"Training scenes: {len(tokens)}")
 
     dataset = BevfusionDataset(scene_loader, cache_path, config, trajectory_sampling,
                                big_pkl_mode=teacher_full is not None)
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
-                        num_workers=args.num_workers, collate_fn=bevfusion_collate, pin_memory=True)
+    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True) if ddp else None
+    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=(sampler is None),
+                        sampler=sampler, num_workers=args.num_workers,
+                        collate_fn=bevfusion_collate, pin_memory=True)
 
     model = GTRSBevfusionModel(config, num_poses=trajectory_sampling.num_poses).to(device).train()
+    core_model = model  # unwrapped handle for .planning_head / state_dict / save
+    if ddp:
+        if args.sync_bn:
+            model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank,
+                    find_unused_parameters=args.find_unused_params)
+        core_model = model.module
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # cosine schedule with linear warmup (per-epoch stepping)
@@ -214,7 +252,7 @@ def main():
     start_epoch = 0
     if args.resume and os.path.exists(args.resume):
         ckpt = torch.load(args.resume, map_location="cpu")
-        model.load_state_dict(ckpt["state_dict"])
+        core_model.load_state_dict(ckpt["state_dict"])
         if "optimizer" in ckpt:
             optimizer.load_state_dict(ckpt["optimizer"])
         if scheduler is not None and ckpt.get("scheduler") is not None:
@@ -222,11 +260,14 @@ def main():
         if scaler is not None and ckpt.get("scaler") is not None:
             scaler.load_state_dict(ckpt["scaler"])
         start_epoch = ckpt.get("epoch", -1) + 1
-        print(f"Resumed from {args.resume} at epoch {start_epoch}")
+        if is_main:
+            print(f"Resumed from {args.resume} at epoch {start_epoch}")
 
-    log_fh = open(args.log_file, "a") if args.log_file else None
+    log_fh = open(args.log_file, "a") if (args.log_file and is_main) else None
 
     def log(line: str):
+        if not is_main:
+            return
         print(line, flush=True)
         if log_fh:
             log_fh.write(line + "\n")
@@ -248,8 +289,11 @@ def main():
 
     for epoch in range(start_epoch, args.epochs):
         torch.cuda.empty_cache()
+        if sampler is not None:
+            sampler.set_epoch(epoch)  # reshuffle differently each epoch across ranks
         agg = {}
-        for feats, tgts in tqdm(loader, desc=f"Epoch {epoch+1}/{args.epochs}"):
+        iterable = tqdm(loader, desc=f"Epoch {epoch+1}/{args.epochs}") if is_main else loader
+        for feats, tgts in iterable:
             batch_tokens = tgts.pop("token", None)  # list[str]; not a tensor
             feats, tgts = to_dev(feats, tgts)
             if teacher_full is not None and batch_tokens is not None:
@@ -257,7 +301,7 @@ def main():
             optimizer.zero_grad()
             with torch.cuda.amp.autocast(enabled=args.amp):
                 preds = model(feats)
-                losses = gtrs_bevfusion_loss(tgts, preds, config, model.planning_head)
+                losses = gtrs_bevfusion_loss(tgts, preds, config, core_model.planning_head)
             scaler.scale(losses["loss_total"]).backward()
             if args.grad_clip > 0:
                 scaler.unscale_(optimizer)
@@ -273,21 +317,27 @@ def main():
         msg = " | ".join(f"{k}={agg[k]/len(loader):.4f}" for k in sorted(agg))
         log(f"[epoch {epoch+1}/{args.epochs}] lr={cur_lr:.2e} | {msg}")
 
-        state = {
-            "epoch": epoch,
-            "state_dict": model.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "scheduler": scheduler.state_dict() if scheduler is not None else None,
-            "scaler": scaler.state_dict() if args.amp else None,
-            "config": vars(args),
-        }
-        torch.save(state, ckpt_dir / f"{args.run_name}_latest.pth")
-        if args.save_every > 0 and (epoch + 1) % args.save_every == 0:
-            torch.save(state, ckpt_dir / f"{args.run_name}_epoch{epoch+1}.pth")
+        if is_main:
+            state = {
+                "epoch": epoch,
+                "state_dict": core_model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict() if scheduler is not None else None,
+                "scaler": scaler.state_dict() if args.amp else None,
+                "config": vars(args),
+            }
+            torch.save(state, ckpt_dir / f"{args.run_name}_latest.pth")
+            if args.save_every > 0 and (epoch + 1) % args.save_every == 0:
+                torch.save(state, ckpt_dir / f"{args.run_name}_epoch{epoch+1}.pth")
+        if ddp:
+            dist.barrier()  # keep ranks in lock-step across the epoch boundary
 
     if log_fh:
         log_fh.close()
-    print("=== training run complete ===")
+    if ddp:
+        dist.destroy_process_group()
+    if is_main:
+        print("=== training run complete ===")
 
 
 if __name__ == "__main__":
