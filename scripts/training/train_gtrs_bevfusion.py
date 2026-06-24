@@ -113,6 +113,12 @@ def main():
     parser.add_argument("--maps-path", type=str, default=None)
     parser.add_argument("--sensor-blobs-path", type=str, default=None,
                         help="dir containing <log>/CAM_*/*.jpg (e.g. .../sensor_blobs/mini)")
+    parser.add_argument("--scene-filter-yaml", type=str,
+                        default=str(Path(__file__).resolve().parents[2] /
+                                    "navsim/planning/script/config/common/train_test_split"
+                                    "/scene_filter/navtrain.yaml"),
+                        help="navsim SceneFilter hydra yaml (default: official navtrain split). "
+                             "Pass '' to fall back to a generic frame filter.")
     parser.add_argument("--teacher-cache-path", type=str, default=None,
                         help="legacy: dir of per-token <token>.pkl score files")
     parser.add_argument("--teacher-pkl", type=str, default=None,
@@ -188,7 +194,22 @@ def main():
     log_paths = [ws / "mini_navsim_logs" / "mini", ws / "trainval_navsim_logs" / "trainval"]
     log_paths = [p for p in log_paths if p.exists()]
 
-    scene_filter = SceneFilter(num_history_frames=4, num_future_frames=10, has_route=True)
+    # Use NAVSIM's official navtrain SceneFilter (explicit log_names + tokens) so
+    # we enumerate EXACTLY the tokens GTRS trains on (and that the teacher pkl
+    # covers). A generic frame filter scans all of trainval and mostly produces
+    # tokens that aren't in navtrain -> tiny overlap with the teacher scores.
+    if args.scene_filter_yaml and os.path.exists(args.scene_filter_yaml):
+        from omegaconf import OmegaConf
+        from hydra.utils import instantiate
+        scene_filter = instantiate(OmegaConf.load(args.scene_filter_yaml))
+        if is_main:
+            print(f"SceneFilter: navtrain yaml "
+                  f"({len(scene_filter.log_names or [])} logs, "
+                  f"{len(scene_filter.tokens or [])} tokens) <- {args.scene_filter_yaml}")
+    else:
+        scene_filter = SceneFilter(num_history_frames=4, num_future_frames=10, has_route=True)
+        if is_main:
+            print("SceneFilter: generic (no navtrain yaml found)")
     scene_loader = LazySceneLoader(
         original_sensor_path=sensor_blobs_path,
         data_paths=log_paths,

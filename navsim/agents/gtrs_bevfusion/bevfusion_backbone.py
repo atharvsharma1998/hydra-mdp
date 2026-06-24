@@ -182,35 +182,51 @@ class BEVFusionBackbone(nn.Module):
         if metas is None:
             metas = [{} for _ in range(img.shape[0])]
 
-        features = []
-        # Match training order (camera then lidar) so ConvFuser sees [cam, lid].
-        for sensor in m.encoders:
-            if sensor == "camera":
-                feat = m.extract_camera_features(
-                    img,
-                    points,
-                    camera2ego,
-                    lidar2ego,
-                    lidar2camera,
-                    lidar2image,
-                    camera_intrinsics,
-                    camera2lidar,
-                    img_aug_matrix,
-                    lidar_aug_matrix,
-                    metas,
-                )
-            elif sensor == "lidar":
-                feat = m.extract_lidar_features(points)
+        # BEVFusion's LSS view-transform clamps depth to 1e5, which overflows
+        # fp16 (max ~65504). It was never written for autocast, so run the whole
+        # F_env extractor in fp32 regardless of any outer AMP context. The
+        # planning / detection / segmentation heads still benefit from AMP.
+        with torch.cuda.amp.autocast(enabled=False):
+            img = img.float()
+            camera2ego = camera2ego.float()
+            lidar2ego = lidar2ego.float()
+            lidar2camera = lidar2camera.float()
+            lidar2image = lidar2image.float()
+            camera_intrinsics = camera_intrinsics.float()
+            camera2lidar = camera2lidar.float()
+            img_aug_matrix = img_aug_matrix.float()
+            lidar_aug_matrix = lidar_aug_matrix.float()
+            points = [p.float() for p in points]
+
+            features = []
+            # Match training order (camera then lidar) so ConvFuser sees [cam, lid].
+            for sensor in m.encoders:
+                if sensor == "camera":
+                    feat = m.extract_camera_features(
+                        img,
+                        points,
+                        camera2ego,
+                        lidar2ego,
+                        lidar2camera,
+                        lidar2image,
+                        camera_intrinsics,
+                        camera2lidar,
+                        img_aug_matrix,
+                        lidar_aug_matrix,
+                        metas,
+                    )
+                elif sensor == "lidar":
+                    feat = m.extract_lidar_features(points)
+                else:
+                    raise ValueError(f"unsupported sensor: {sensor}")
+                features.append(feat)
+
+            if m.fuser is not None:
+                x = m.fuser(features)
             else:
-                raise ValueError(f"unsupported sensor: {sensor}")
-            features.append(feat)
+                assert len(features) == 1
+                x = features[0]
 
-        if m.fuser is not None:
-            x = m.fuser(features)
-        else:
-            assert len(features) == 1
-            x = features[0]
-
-        x = m.decoder["backbone"](x)
-        x = m.decoder["neck"](x)
-        return _neck_first(x)
+            x = m.decoder["backbone"](x)
+            x = m.decoder["neck"](x)
+            return _neck_first(x)
