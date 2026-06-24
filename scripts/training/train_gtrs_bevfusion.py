@@ -19,7 +19,13 @@ Teacher scores (PDM distillation): two options
 """
 import os
 import argparse
+import warnings
 from pathlib import Path
+
+# nuplan's map code spams "invalid value encountered in cast" (NaN->int) once per
+# map query, which floods stdout/logs over 100k scenes. It's harmless; silence it.
+warnings.filterwarnings("ignore", message="invalid value encountered in cast")
+warnings.filterwarnings("ignore", category=UserWarning, module="torch.functional")
 
 if __name__ == "__main__" or "NUPLAN_MAPS_ROOT" not in os.environ:
     parser = argparse.ArgumentParser(add_help=False)
