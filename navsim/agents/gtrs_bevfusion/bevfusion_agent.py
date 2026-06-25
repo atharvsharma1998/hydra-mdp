@@ -24,9 +24,8 @@ from navsim.agents.abstract_agent import AbstractAgent
 from navsim.agents.gtrs_bevfusion.bevfusion_features import BEVFusionFeatureBuilder
 from navsim.agents.gtrs_bevfusion.bevfusion_loss import gtrs_bevfusion_loss
 from navsim.agents.gtrs_bevfusion.bevfusion_model import GTRSBevfusionModel
+from navsim.agents.gtrs_bevfusion.bevfusion_target import BEVFusionTargetBuilder
 from navsim.agents.gtrs_bevfusion.config import GTRSBevfusionConfig
-from navsim.agents.transfuser.transfuser_config import TransfuserConfig
-from navsim.agents.transfuser.transfuser_features import TransfuserTargetBuilder
 from navsim.common.dataclasses import AgentInput, Scene, SensorConfig, Trajectory
 from navsim.planning.training.abstract_feature_target_builder import (
     AbstractFeatureBuilder,
@@ -55,8 +54,6 @@ class GTRSBevfusionAgent(AbstractAgent):
             num_poses=trajectory_sampling.num_poses,
             backbone_checkpoint=backbone_checkpoint,
         )
-        # target builder reuses Transfuser geometry (matches our +/-32 / (128,256) / 7-class GT)
-        self._transfuser_config = TransfuserConfig()
 
     def name(self) -> str:
         return self.__class__.__name__
@@ -71,7 +68,7 @@ class GTRSBevfusionAgent(AbstractAgent):
         return SensorConfig.build_all_sensors(include=[3])
 
     def get_target_builders(self) -> List[AbstractTargetBuilder]:
-        return [TransfuserTargetBuilder(trajectory_sampling=self._trajectory_sampling, config=self._transfuser_config)]
+        return [BEVFusionTargetBuilder(trajectory_sampling=self._trajectory_sampling)]
 
     def get_feature_builders(self) -> List[AbstractFeatureBuilder]:
         return [BEVFusionFeatureBuilder(self._config)]

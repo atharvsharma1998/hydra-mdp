@@ -30,12 +30,16 @@ from navsim.agents.transfuser.transfuser_model import AgentHead
 class BEVSegHead(nn.Module):
     """Conv classifier over F_env producing NAVSIM single-label BEV logits.
 
-    Orientation (CALIBRATED): an F_env axis probe (localized LiDAR clusters) and
-    a single-scene overfit confirmed F_env rows = x (forward -> high rows) and
-    cols = y (left -> high cols), matching NAVSIM's GT seg frame after its
-    rot90/flip. So we crop the forward half (high rows) with no transpose/flip.
-    GroupNorm (not BatchNorm) is used so train/eval are identical and the head is
-    robust to small batch sizes.
+    360 deg (full-surround) map: F_env already covers the full +/-32 m square, so
+    we classify the WHOLE feature (no forward-half crop) and resample to the
+    ego-centered (256, 256) GT frame produced by ``BEVFusionTargetBuilder``.
+
+    Orientation (CALIBRATED): an F_env axis probe + single-scene overfit confirmed
+    F_env rows = x (forward -> high rows), cols = y (left -> high cols), matching
+    NAVSIM's GT seg frame after its rot90/flip. The 360 GT reuses that exact
+    rasterization (just ego-centered + full square), so the convention is
+    preserved end to end -> no transpose/flip needed (kept as toggles for re-cal).
+    GroupNorm (not BatchNorm) keeps train/eval identical and small-batch robust.
     """
 
     def __init__(self, in_channels: int, num_classes: int, out_hw, mid_channels: int = 128):
@@ -47,16 +51,16 @@ class BEVSegHead(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(mid_channels, num_classes, 1),
         )
-        self.forward_is_high = True  # forward (x>0) occupies the high-index rows
-        self.transpose_xy = False
+        self.transpose_xy = False  # orientation re-cal toggle (see docstring)
+        self.flip_rows = False     # set True only if viz shows forward at low rows
 
     def forward(self, fenv: torch.Tensor) -> torch.Tensor:
         x = fenv
         if self.transpose_xy:
             x = x.transpose(-1, -2)
-        # crop forward half along the row (x) axis
-        h = x.shape[-2]
-        x = x[..., h // 2:, :] if self.forward_is_high else x[..., : h // 2, :]
+        if self.flip_rows:
+            x = torch.flip(x, dims=[-2])
+        # full-surround: classify the whole F_env (no forward-half crop)
         logits = self.classifier(x)
         logits = F.interpolate(logits, size=self.out_hw, mode="bilinear", align_corners=False)
         return logits

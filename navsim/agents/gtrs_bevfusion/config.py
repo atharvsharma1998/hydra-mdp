@@ -83,7 +83,10 @@ class GTRSBevfusionConfig:
 
     # ---------------- bev segmentation head (NAVSIM single-label CE) ---------------
     num_bev_classes: int = 7          # 0=background + 6 NAVSIM classes
-    bev_seg_frame: Tuple[int, int] = (128, 256)   # (H, W) of bev_semantic_map GT
+    # Full-surround (360 deg) ego-centered BEV semantic frame: x,y in [-32,32] m
+    # at 4 px/m => (256, 256). Built by BEVFusionTargetBuilder (Seg360Config).
+    # (The old forward-only frame was (128, 256).)
+    bev_seg_frame: Tuple[int, int] = (256, 256)   # (H, W) of bev_semantic_map GT
     # Per-class CE weights (idx 0=bg ... 6); rare classes (centerline, peds,
     # static) up-weighted. Calibrate against real class frequencies after the
     # first data pass.

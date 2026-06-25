@@ -30,12 +30,10 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 
 from navsim.common.dataclasses import SensorConfig, SceneFilter
-from navsim.common.enums import LidarIndex
 from navsim.agents.gtrs_bevfusion.config import GTRSBevfusionConfig
 from navsim.agents.gtrs_bevfusion.bevfusion_features import BEVFusionFeatureBuilder
 from navsim.agents.gtrs_bevfusion.bevfusion_model import GTRSBevfusionModel
-from navsim.agents.transfuser.transfuser_config import TransfuserConfig
-from navsim.agents.transfuser.transfuser_features import TransfuserTargetBuilder
+from navsim.agents.gtrs_bevfusion.bevfusion_target import BEVFusionTargetBuilder
 from nuplan.planning.simulation.trajectory.trajectory_sampling import TrajectorySampling
 from train_modular_planner import LazySceneLoader
 
@@ -79,7 +77,7 @@ def main():
     scene = loader.get_scene_from_token(token)
     agent_input = scene.get_agent_input()
     feats = BEVFusionFeatureBuilder(config).compute_features(agent_input)
-    tgts = TransfuserTargetBuilder(trajectory_sampling=ts, config=TransfuserConfig()).compute_targets(scene)
+    tgts = BEVFusionTargetBuilder(trajectory_sampling=ts).compute_targets(scene)
 
     model = GTRSBevfusionModel(config, num_poses=ts.num_poses).to(device)
     if args.checkpoint and os.path.exists(args.checkpoint):
@@ -97,26 +95,52 @@ def main():
     pred = out["bev_semantic_map"][0].argmax(0).cpu().numpy()
     gt = tgts["bev_semantic_map"].cpu().numpy().astype(int)
 
-    # lidar occupancy in seg frame (same mapping as TransfuserTargetBuilder._coords_to_pixel)
-    H, W = config.bev_seg_frame
-    pc = agent_input.lidars[-1].lidar_pc[LidarIndex.POSITION].T  # (P,3)
-    occ = np.zeros((H, W), dtype=np.float32)
-    px = (pc[:, 0] / 0.25).astype(int)            # x (forward) -> row
-    py = (pc[:, 1] / 0.25 + W / 2).astype(int)    # y (lateral) -> col
-    m = (px >= 0) & (px < H) & (py >= 0) & (py < W)
-    occ[px[m], py[m]] = 1.0
-    occ = np.rot90(occ)[::-1]  # match transfuser frame ops
+    # detection boxes: GT (from targets) and predicted (label prob > 0.5)
+    gt_states = tgts["agent_states"].cpu().numpy()
+    gt_mask = tgts["agent_labels"].cpu().numpy().astype(bool)
+    pred_states = pred_mask = None
+    if "agent_states" in out:
+        pred_states = out["agent_states"][0].cpu().numpy()
+        pred_mask = (out["agent_labels"][0].sigmoid().cpu().numpy() > 0.5)
 
-    front = agent_input.cameras[-1].cam_f0.image
+    def _draw_boxes(ax, states, mask, color):
+        if states is None:
+            return
+        for i in range(states.shape[0]):
+            if not mask[i]:
+                continue
+            x, y, hd, length, width = states[i, :5]
+            corners = np.array([[length / 2, width / 2], [length / 2, -width / 2],
+                                [-length / 2, -width / 2], [-length / 2, width / 2]])
+            rot = np.array([[np.cos(hd), -np.sin(hd)], [np.sin(hd), np.cos(hd)]])
+            world = corners @ rot.T + np.array([x, y])  # (4,2) in ego (x fwd, y left)
+            # plot as (y, x): horizontal=lateral, vertical=forward
+            ax.add_patch(plt.Polygon(np.stack([world[:, 1], world[:, 0]], axis=1),
+                                     closed=True, fill=False, edgecolor=color, lw=1.5))
 
-    fig, ax = plt.subplots(1, 4, figsize=(22, 5))
-    ax[0].imshow(front); ax[0].set_title("front camera (CAM_F0)")
-    ax[1].imshow(gt, cmap=_CMAP, vmin=0, vmax=6); ax[1].set_title("GT bev_semantic")
-    ax[2].imshow(pred, cmap=_CMAP, vmin=0, vmax=6); ax[2].set_title("pred bev_semantic")
-    ax[3].imshow(occ, cmap="gray"); ax[3].set_title("LiDAR occupancy (seg frame)")
-    for a in ax: a.axis("off")
+    # 3x3 grid: row0/1 = 6 cameras, row2 = GT seg | pred seg | detection BEV
+    cams = agent_input.cameras[-1]
+    cam_order = ["cam_l0", "cam_f0", "cam_r0", "cam_l1", "cam_b0", "cam_r1"]
+    fig, ax = plt.subplots(3, 3, figsize=(18, 16))
+    for i, name in enumerate(cam_order):
+        a = ax[i // 3, i % 3]
+        a.imshow(getattr(cams, name).image)
+        a.set_title(name.upper()); a.axis("off")
+
+    ax[2, 0].imshow(gt, cmap=_CMAP, vmin=0, vmax=6); ax[2, 0].set_title("GT bev_semantic (360)")
+    ax[2, 1].imshow(pred, cmap=_CMAP, vmin=0, vmax=6); ax[2, 1].set_title("pred bev_semantic (360)")
+    ax[2, 0].axis("off"); ax[2, 1].axis("off")
+
+    bx = ax[2, 2]
+    bx.set_title("detection: GT=green pred=red")
+    bx.set_xlim(32, -32); bx.set_ylim(-32, 32)  # left(+y) on left, forward(+x) up
+    bx.set_aspect("equal"); bx.grid(True, alpha=0.2)
+    bx.plot(0, 0, "k*", ms=10)  # ego
+    _draw_boxes(bx, gt_states, gt_mask, "green")
+    _draw_boxes(bx, pred_states, pred_mask, "red")
+
     plt.tight_layout()
-    plt.savefig(args.out, dpi=110, bbox_inches="tight")
+    plt.savefig(args.out, dpi=100, bbox_inches="tight")
     print("saved", args.out)
 
 

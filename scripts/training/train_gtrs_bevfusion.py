@@ -63,8 +63,7 @@ from navsim.agents.gtrs_bevfusion.bevfusion_features import BEVFusionFeatureBuil
 from navsim.agents.gtrs_bevfusion.bevfusion_collate import bevfusion_collate
 from navsim.agents.gtrs_bevfusion.bevfusion_model import GTRSBevfusionModel
 from navsim.agents.gtrs_bevfusion.bevfusion_loss import gtrs_bevfusion_loss
-from navsim.agents.transfuser.transfuser_config import TransfuserConfig
-from navsim.agents.transfuser.transfuser_features import TransfuserTargetBuilder
+from navsim.agents.gtrs_bevfusion.bevfusion_target import BEVFusionTargetBuilder
 # train_modular_planner.py sits in this same dir (on sys.path[0] when run as a
 # script). Its argparse header is skipped because NUPLAN_MAPS_ROOT is set above.
 from train_modular_planner import LazySceneLoader
@@ -77,9 +76,7 @@ class BevfusionDataset(Dataset):
         self.cache_path = cache_path
         self.big_pkl_mode = big_pkl_mode  # if True, teacher scores are injected in the train loop
         self.feature_builder = BEVFusionFeatureBuilder(config)
-        self.target_builder = TransfuserTargetBuilder(
-            trajectory_sampling=trajectory_sampling, config=TransfuserConfig()
-        )
+        self.target_builder = BEVFusionTargetBuilder(trajectory_sampling=trajectory_sampling)
 
     def __len__(self):
         return len(self.scene_loader.tokens)
