@@ -135,6 +135,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--prefetch-factor", type=int, default=4,
+                        help="batches each worker prefetches (deeper queue rides through dataloader stalls)")
     # ---- production / cloud flags (defaults preserve the local overfit flow) ----
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--grad-clip", type=float, default=0.0, help="max grad norm (0 = off)")
@@ -246,9 +248,16 @@ def main():
     dataset = BevfusionDataset(scene_loader, cache_path, config, trajectory_sampling,
                                big_pkl_mode=teacher_full is not None)
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True) if ddp else None
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=(sampler is None),
-                        sampler=sampler, num_workers=args.num_workers,
-                        collate_fn=bevfusion_collate, pin_memory=True)
+    # persistent_workers keeps the (expensive) worker processes + their warm
+    # nuplan map caches alive across epochs; prefetch_factor deepens the queue so
+    # the GPU rides through the bursty per-sample map-query/decode stalls.
+    loader_kwargs = dict(batch_size=args.batch_size, shuffle=(sampler is None),
+                         sampler=sampler, num_workers=args.num_workers,
+                         collate_fn=bevfusion_collate, pin_memory=True)
+    if args.num_workers > 0:
+        loader_kwargs["persistent_workers"] = True
+        loader_kwargs["prefetch_factor"] = args.prefetch_factor
+    loader = DataLoader(dataset, **loader_kwargs)
 
     model = GTRSBevfusionModel(config, num_poses=trajectory_sampling.num_poses).to(device).train()
     core_model = model  # unwrapped handle for .planning_head / state_dict / save

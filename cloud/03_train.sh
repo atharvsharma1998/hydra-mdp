@@ -11,10 +11,20 @@ RUN_NAME="${RUN_NAME:-gtrs_bevfusion_navtrain}"
 EPOCHS="${EPOCHS:-30}"
 BATCH="${BATCH:-4}"            # PER-GPU batch (tune to GPU memory; BEVFusion is heavy)
 LR="${LR:-2e-4}"
-WORKERS="${WORKERS:-8}"        # per-GPU DataLoader workers
+WORKERS="${WORKERS:-10}"      # per-GPU DataLoader workers
+PREFETCH="${PREFETCH:-4}"     # batches prefetched per worker (deeper queue vs stalls)
 AMP="${AMP:-1}"               # 1=mixed precision (set 0 if you see NaNs)
 # NGPU: number of GPUs to train on. >1 => DistributedDataParallel via torchrun.
 NGPU="${NGPU:-$($PYTHON -c 'import torch;print(torch.cuda.device_count())' 2>/dev/null || echo 1)}"
+
+# Dataloader parallelism comes from many workers (one __getitem__ each), NOT from
+# OMP threads inside each worker. Keep OMP small to avoid thread oversubscription
+# (num_workers x OMP x ngpu must stay near the core count). A modest bump from
+# torchrun's default of 1 helps the small numpy/map matmuls without thrashing.
+CORES="$(nproc 2>/dev/null || echo 8)"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-2}"
+echo "OMP_NUM_THREADS=$OMP_NUM_THREADS | cores=$CORES | workers/gpu=$WORKERS | ngpu=$NGPU"
+echo "  (total dataloader threads ~= workers*omp*ngpu = $(( WORKERS * OMP_NUM_THREADS * NGPU )); keep <= ~$CORES)"
 
 mkdir -p "$NAVSIM_WS/logs" "$CKPT_DIR"
 cd "$NAVSIM_REPO"
@@ -54,6 +64,7 @@ TRAIN_ARGS=(scripts/training/train_gtrs_bevfusion.py
   --lr-schedule cosine --warmup-epochs 1
   --grad-clip 35
   --num-workers "$WORKERS"
+  --prefetch-factor "$PREFETCH"
   --save-every 1
   --run-name "$RUN_NAME"
   --log-file "$LOG"

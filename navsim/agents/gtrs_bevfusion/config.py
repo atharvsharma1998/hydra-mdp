@@ -35,7 +35,16 @@ class GTRSBevfusionConfig:
     use_bev_seg_head: bool = True
 
     # ---------------- camera inputs (per-camera, for LSS view transform) ---------------
-    camera_names: Tuple[str, ...] = ("cam_l0", "cam_f0", "cam_r0")
+    # 6-camera surround: 3 front (l0,f0,r0) + 2 side (l1,r1) + 1 back (b0).
+    # The feature builder is camera-agnostic (loops this list, builds per-camera
+    # calibration); the agent already loads all 8 sensors, so this is the only
+    # switch needed. Detection + planning become full-surround; BEV-seg stays
+    # forward-only until a 360-deg seg GT is generated (see BEVSegHead).
+    camera_names: Tuple[str, ...] = (
+        "cam_l0", "cam_f0", "cam_r0",  # front trio
+        "cam_l1", "cam_r1",            # left / right sides
+        "cam_b0",                       # back
+    )
     image_size: Tuple[int, int] = (256, 704)     # (H, W) fed to image backbone
     img_norm_mean: Tuple[float, float, float] = (0.485, 0.456, 0.406)
     img_norm_std: Tuple[float, float, float] = (0.229, 0.224, 0.225)
