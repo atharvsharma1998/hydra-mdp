@@ -51,3 +51,21 @@ wandb/
 # keep the trajectory vocabulary (small, required at runtime):
 !traj_final/
 !traj_final/*.npy
+
+# --- C++ deploy / CMake build artifacts (do not commit generated build output) ---
+build/
+deploy/build/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+*.o
+*.obj
+*.so
+*.so.*
+*.a
+*.plan
+# large binary parity dumps (keep the small GT .txt references checked in)
+deploy/parity-data/*.tensor
+deploy/parity-data/*.bin

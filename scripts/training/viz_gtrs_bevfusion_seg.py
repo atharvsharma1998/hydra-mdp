@@ -116,6 +116,8 @@ def main():
     p.add_argument("--token", type=str, default=None, help="explicit start token (overrides --scene-index)")
     p.add_argument("--num-frames", type=int, default=1,
                    help="render this many CONSECUTIVE scenes from the start index (+ a GIF)")
+    p.add_argument("--all", action="store_true",
+                   help="render EVERY sensor token in the split (overrides --num-frames/--scene-index)")
     p.add_argument("--show-gt-boxes", action="store_true",
                    help="also draw ground-truth detection boxes (default: predicted only)")
     p.add_argument("--score-thresh", type=float, default=0.2,
@@ -143,12 +145,15 @@ def main():
         and (sensor_blobs_path / loader.token_to_slice[t][0].name.replace(".pkl", "") / "CAM_F0").is_dir()
     ]
     assert len(tokens) > 0, "no tokens with sensors"
-    if args.token is not None:
+    if args.all:
+        start, n_frames = 0, len(tokens)
+    elif args.token is not None:
         assert args.token in tokens, f"token {args.token} not among {len(tokens)} sensor tokens"
         start = tokens.index(args.token)
+        n_frames = max(1, args.num_frames)
     else:
         start = args.scene_index % len(tokens)
-    n_frames = max(1, args.num_frames)
+        n_frames = max(1, args.num_frames)
     sel_tokens = [tokens[(start + k) % len(tokens)] for k in range(n_frames)]
     print(f"rendering {n_frames} consecutive frame(s) from index {start} / {len(tokens)} sensor tokens")
 
