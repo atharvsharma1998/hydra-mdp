@@ -80,6 +80,24 @@ class GTRSBevfusionConfig:
     num_bounding_boxes: int = 30
     det_range: float = 32.0           # +/- meters used to filter/scale boxes
     latent: bool = False              # consumed by reused transfuser _agent_loss
+    # Multi-class detection (CUDA-BEVFusion style). NAVSIM gt_names available:
+    # vehicle, pedestrian, bicycle, traffic_cone, barrier, czone_sign,
+    # generic_object. We keep the dynamic + safety-relevant classes and drop the
+    # noisy `generic_object` catch-all + rare `czone_sign` (add them here to train
+    # on them). Order defines the class id (0..K-1); a background class (id K) is
+    # added internally by the head/loss. Single-entry list == legacy vehicle-only.
+    detection_class_names: Tuple[str, ...] = (
+        "vehicle", "pedestrian", "bicycle", "traffic_cone", "barrier",
+    )
+
+    # DETR "eos_coef": weight of the background/no-object class in the detection
+    # classification CE. <1 down-weights background so the head doesn't collapse
+    # to predicting "nothing" (30 queries >> #objects). 0.1 is the DETR default.
+    detection_bg_weight: float = 0.1
+
+    @property
+    def num_detection_classes(self) -> int:
+        return len(self.detection_class_names)
 
     # ---------------- bev segmentation head (NAVSIM single-label CE) ---------------
     num_bev_classes: int = 7          # 0=background + 6 NAVSIM classes
@@ -97,7 +115,10 @@ class GTRSBevfusionConfig:
     trajectory_imi_weight: float = 1.0
     trajectory_distill_weight: float = 1.0
     agent_class_weight: float = 10.0
-    agent_box_weight: float = 1.0
+    # Box L1 supervises x,y position + size + heading. Kept too low (1.0) it gets
+    # drowned by class/seg (both 10x) and position stays loose even after overfit
+    # (DETR uses L1=5 vs class=1). Raised so position actually converges.
+    agent_box_weight: float = 5.0
     bev_semantic_weight: float = 10.0
 
     def __post_init__(self):

@@ -144,6 +144,9 @@ def main():
     parser.add_argument("--amp", action="store_true", help="mixed-precision training")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--log-file", type=str, default=None)
+    parser.add_argument("--tb-dir", type=str, default=None,
+                        help="TensorBoard log dir (default: <workspace>/tb/<run_name>). "
+                             "Pass '' to disable.")
     parser.add_argument("--run-name", type=str, default="gtrs_bevfusion")
     parser.add_argument("--no-find-unused-params", dest="find_unused_params",
                         action="store_false", default=True,
@@ -228,12 +231,20 @@ def main():
     if is_main:
         print(f"Tokens with downloaded sensors: {len(tokens)} / {len(scene_loader.tokens)}")
 
-    # align to tokens that actually have teacher scores in the big pkl
+    # align to tokens that actually have teacher scores. In big-pkl mode this is an
+    # in-memory dict lookup; in per-token cache mode (low-RAM, local) we require the
+    # <token>.pkl shard to exist. Without this filter, cache-mode batches mix samples
+    # with/without gt_scores and the collate breaks (it keys off sample 0).
     if teacher_full is not None:
         before = len(tokens)
         tokens = [t for t in tokens if t in teacher_full]
         if is_main:
-            print(f"Tokens with teacher scores: {len(tokens)} / {before}")
+            print(f"Tokens with teacher scores (big pkl): {len(tokens)} / {before}")
+    elif cache_path.exists():
+        before = len(tokens)
+        tokens = [t for t in tokens if (cache_path / f"{t}.pkl").exists()]
+        if is_main:
+            print(f"Tokens with teacher cache shard: {len(tokens)} / {before} ({cache_path})")
 
     if args.num_scenes > 0:
         tokens = tokens[: args.num_scenes]
@@ -298,6 +309,20 @@ def main():
 
     log_fh = open(args.log_file, "a") if (args.log_file and is_main) else None
 
+    # TensorBoard (rank-0 only). The torch 1.10 SummaryWriter trips over modern
+    # setuptools (`distutils.version` not auto-loaded); pre-importing it fixes that.
+    # Guarded so a missing/broken tensorboard never kills a training run.
+    tb_writer = None
+    if is_main and args.tb_dir != "":
+        tb_dir = args.tb_dir or str(ws / "tb" / args.run_name)
+        try:
+            import distutils.version  # noqa: F401  (must precede tensorboard import)
+            from torch.utils.tensorboard import SummaryWriter
+            tb_writer = SummaryWriter(tb_dir)
+            print(f"TensorBoard logging to {tb_dir}  (tensorboard --logdir {ws / 'tb'})", flush=True)
+        except Exception as e:  # pragma: no cover - optional dep
+            print(f"[warn] TensorBoard disabled ({e})", flush=True)
+
     def log(line: str):
         if not is_main:
             return
@@ -320,6 +345,7 @@ def main():
             gt[m] = torch.from_numpy(arr).to(device)
         return gt
 
+    global_step = start_epoch * len(loader)
     for epoch in range(start_epoch, args.epochs):
         torch.cuda.empty_cache()
         if sampler is not None:
@@ -343,12 +369,20 @@ def main():
             scaler.update()
             for k, v in losses.items():
                 agg[k] = agg.get(k, 0.0) + float(v)
+            if tb_writer is not None:
+                tb_writer.add_scalar("step/loss_total", float(losses["loss_total"]), global_step)
+            global_step += 1
         if scheduler is not None:
             scheduler.step()
 
         cur_lr = optimizer.param_groups[0]["lr"]
         msg = " | ".join(f"{k}={agg[k]/len(loader):.4f}" for k in sorted(agg))
         log(f"[epoch {epoch+1}/{args.epochs}] lr={cur_lr:.2e} | {msg}")
+        if tb_writer is not None:
+            for k in agg:
+                tb_writer.add_scalar(f"epoch/{k}", agg[k] / len(loader), epoch + 1)
+            tb_writer.add_scalar("epoch/lr", cur_lr, epoch + 1)
+            tb_writer.flush()
 
         if is_main:
             state = {
@@ -365,6 +399,8 @@ def main():
         if ddp:
             dist.barrier()  # keep ranks in lock-step across the epoch boundary
 
+    if tb_writer is not None:
+        tb_writer.close()
     if log_fh:
         log_fh.close()
     if ddp:

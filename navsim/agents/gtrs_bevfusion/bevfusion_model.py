@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Dict, List
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -25,6 +26,37 @@ from navsim.agents.gtrs_bevfusion.bevfusion_backbone import BEVFusionBackbone
 from navsim.agents.gtrs_bevfusion.config import GTRSBevfusionConfig
 from navsim.agents.modular_planner import PlanningHead
 from navsim.agents.transfuser.transfuser_model import AgentHead
+from navsim.agents.transfuser.transfuser_features import BoundingBox2DIndex
+
+
+class MultiClassAgentHead(nn.Module):
+    """DETR-style multi-class box head: regresses 2D boxes and predicts a class
+    distribution over ``num_classes`` + 1 (background) per query.
+
+    Output keys:
+      * ``agent_states``       [B, N, 5]   (x, y, heading, length, width)
+      * ``agent_class_logits`` [B, N, K+1] (last index = background/no-object)
+      * ``agent_labels``       [B, N]      objectness logit (= -background logit),
+                                           kept for back-compat / thresholded viz.
+    """
+
+    def __init__(self, num_agents: int, num_classes: int, d_ffn: int, d_model: int):
+        super().__init__()
+        self._num_classes = num_classes
+        self._mlp_states = nn.Sequential(
+            nn.Linear(d_model, d_ffn), nn.ReLU(), nn.Linear(d_ffn, BoundingBox2DIndex.size()),
+        )
+        self._mlp_label = nn.Sequential(
+            nn.Linear(d_model, d_ffn), nn.ReLU(), nn.Linear(d_ffn, num_classes + 1),
+        )
+
+    def forward(self, agent_queries) -> Dict[str, torch.Tensor]:
+        states = self._mlp_states(agent_queries)
+        states[..., BoundingBox2DIndex.POINT] = states[..., BoundingBox2DIndex.POINT].tanh() * 32
+        states[..., BoundingBox2DIndex.HEADING] = states[..., BoundingBox2DIndex.HEADING].tanh() * np.pi
+        class_logits = self._mlp_label(agent_queries)  # [B, N, K+1]
+        agent_labels = -class_logits[..., -1]  # objectness = logit(not background)
+        return {"agent_states": states, "agent_class_logits": class_logits, "agent_labels": agent_labels}
 
 
 class BEVSegHead(nn.Module):
@@ -115,9 +147,18 @@ class GTRSBevfusionModel(nn.Module):
                 dropout=0.0, batch_first=True,
             )
             self.det_decoder = nn.TransformerDecoder(dec_layer, num_layers=config.nlayers)
-            self.agent_head = AgentHead(
-                num_agents=config.num_bounding_boxes, d_ffn=config.d_ffn, d_model=d,
-            )
+            # multi-class (CUDA-BEVFusion style) when >1 class is configured;
+            # otherwise the legacy binary (vehicle-only) transfuser head.
+            if config.num_detection_classes > 1:
+                self.agent_head = MultiClassAgentHead(
+                    num_agents=config.num_bounding_boxes,
+                    num_classes=config.num_detection_classes,
+                    d_ffn=config.d_ffn, d_model=d,
+                )
+            else:
+                self.agent_head = AgentHead(
+                    num_agents=config.num_bounding_boxes, d_ffn=config.d_ffn, d_model=d,
+                )
 
         # ---- BEV segmentation head ----
         if config.use_bev_seg_head:
