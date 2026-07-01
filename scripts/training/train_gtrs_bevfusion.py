@@ -139,7 +139,8 @@ def main():
     parser.add_argument("--grad-clip", type=float, default=0.0, help="max grad norm (0 = off)")
     parser.add_argument("--lr-schedule", choices=["none", "cosine"], default="none")
     parser.add_argument("--warmup-epochs", type=int, default=0)
-    parser.add_argument("--save-every", type=int, default=1, help="also save epoch{N}.pth every N epochs")
+    parser.add_argument("--save-every", type=int, default=0,
+                        help="also save epoch{N}.pth every N epochs (0 = off; only _latest + _best kept)")
     parser.add_argument("--resume", type=str, default=None, help="checkpoint to resume (model+opt+epoch)")
     parser.add_argument("--amp", action="store_true", help="mixed-precision training")
     parser.add_argument("--seed", type=int, default=0)
@@ -346,6 +347,7 @@ def main():
         return gt
 
     global_step = start_epoch * len(loader)
+    best_loss = float("inf")  # track lowest mean epoch loss for the "best" checkpoint
     for epoch in range(start_epoch, args.epochs):
         torch.cuda.empty_cache()
         if sampler is not None:
@@ -394,6 +396,13 @@ def main():
                 "config": vars(args),
             }
             torch.save(state, ckpt_dir / f"{args.run_name}_latest.pth")
+            # keep only the BEST checkpoint (lowest mean epoch loss); overwrites a single
+            # file so disk stays bounded. Intermediate epoch{N}.pth snapshots are only
+            # written when --save-every > 0 is explicitly requested (default: off).
+            epoch_loss = agg["loss_total"] / len(loader)
+            if epoch_loss < best_loss:
+                best_loss = epoch_loss
+                torch.save(state, ckpt_dir / f"{args.run_name}_best.pth")
             if args.save_every > 0 and (epoch + 1) % args.save_every == 0:
                 torch.save(state, ckpt_dir / f"{args.run_name}_epoch{epoch+1}.pth")
         if ddp:

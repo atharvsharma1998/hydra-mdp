@@ -30,6 +30,21 @@ class GTRSBevfusionConfig:
     env_token_grid: Tuple[int, int] = (32, 32)   # PlanningHead bev_spatial_shape (1024 tokens)
     vocab_dropout_size: int = 2048
 
+    # Hydra-MDP trajectory-selection cost weights (Eq. 11). Paper grid-search ranges:
+    #   w_imi in [0.01, 0.1];  w_nc, w_dac, w_ddc, w_tlc in [0.1, 1];  w_progress in [1, 10].
+    # Selection uses NC, DAC, DDC, TLC penalties + the (TTC, EP) progress bundle. DDC and
+    # TLC are our extensions over base Hydra-MDP (which dropped DDC only due to the NAVSIM
+    # metric bug #14, now fixed; TLC follows Hydra-MDP++ EPDMS). Set the corresponding
+    # scorer_w_*=0 to recover the base paper scorer. lane_keeping (LK) is added inside the
+    # weighted progress bundle (additive, coeff 5 per EPDMS), not as a penalty.
+    scorer_w_imi: float = 0.05
+    scorer_w_nc: float = 0.5
+    scorer_w_dac: float = 0.5
+    scorer_w_ddc: float = 0.5
+    scorer_w_tlc: float = 0.5
+    scorer_w_progress: float = 5.0
+    scorer_w_lk: float = 5.0
+
     # ---------------- which auxiliary heads are active -----------------
     use_detection_head: bool = True
     use_bev_seg_head: bool = True
@@ -77,6 +92,26 @@ class GTRSBevfusionConfig:
     fused_bev_size: int = 100         # F_env spatial H=W (informational)
 
     # ---------------- detection head -----------------
+    # "centerpoint": dense per-cell heatmap + (offset, size, heading) regression
+    #   run directly on the native 100x100 F_env grid (CUDA-BEVFusion CenterPoint
+    #   style). Localization is GRID-ANCHORED -- a decoded centre is the activated
+    #   cell centre + a <=half-cell learned offset, so it cannot drift like the
+    #   position-less DETR query regression (that was the ~1 m center-error floor).
+    # "detr": legacy learned-query transformer head (kept for ablation / fallback).
+    det_head_type: str = "centerpoint"
+    # CenterPoint decode params (inference). Peaks are picked by max-pool NMS, then
+    # the top-K are emitted in the same agent_states/agent_class_logits interface
+    # the viz/diag/export already consume (viz re-thresholds + center-NMS itself).
+    det_max_objects: int = 100        # top-K peaks decoded per frame
+    det_nms_kernel: int = 3           # max-pool window for local-maxima peak NMS
+    # CenterPoint heatmap-target splatting (CenterNet gaussian).
+    det_gaussian_overlap: float = 0.1 # min IoU used to derive per-box radius
+    det_gaussian_min_radius: int = 2  # floor on the splatted gaussian radius
+    # CenterPoint loss weights (replace agent_class/agent_box weights for this head):
+    #   focal heatmap is O(1)/positive; box-reg L1 mixes metres (offset/size) and
+    #   sin/cos (heading), so it is down-weighted (standard CenterPoint ~0.25).
+    det_heatmap_weight: float = 1.0
+    det_reg_weight: float = 0.25
     num_bounding_boxes: int = 30
     det_range: float = 32.0           # +/- meters used to filter/scale boxes
     latent: bool = False              # consumed by reused transfuser _agent_loss
@@ -119,6 +154,12 @@ class GTRSBevfusionConfig:
     # drowned by class/seg (both 10x) and position stays loose even after overfit
     # (DETR uses L1=5 vs class=1). Raised so position actually converges.
     agent_box_weight: float = 5.0
+    # Per-component weight on (x, y) within the box L1. Kept at 1.0 == EQUAL
+    # supervision of center / heading / size: for perception every box attribute
+    # matters equally. (The ~1 m center plateau was caused by the 16x16 F_env pool
+    # starving localization, now fixed by decoding the full 32x32 F_env grid -- so
+    # no loss reweighting is needed. Exposed only as a re-cal knob.)
+    agent_box_xy_weight: float = 1.0
     bev_semantic_weight: float = 10.0
 
     def __post_init__(self):

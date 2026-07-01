@@ -60,6 +60,68 @@ std::vector<DetBox> decode_detections(const std::vector<float>& states, const st
   return kept;
 }
 
+std::vector<DetBox> decode_detections_centerpoint(const std::vector<float>& heatmap, const std::vector<float>& offset,
+                                                  const std::vector<float>& size, const std::vector<float>& heading,
+                                                  int K, int H, int W, float x_min, float y_min, float x_max,
+                                                  float y_max, int nms_kernel, float score_thresh, float nms_dist) {
+  const int HW = H * W;
+  const int pad = nms_kernel / 2;
+  const float cell_x = (x_max - x_min) / H;  // metres per row (x, forward)
+  const float cell_y = (y_max - y_min) / W;  // metres per col (y, left)
+  auto sigmoid = [](float v) { return 1.f / (1.f + std::exp(-v)); };
+
+  std::vector<DetBox> cand;
+  for (int k = 0; k < K; ++k) {
+    const float* hm = heatmap.data() + static_cast<size_t>(k) * HW;
+    for (int r = 0; r < H; ++r) {
+      for (int c = 0; c < W; ++c) {
+        const float v = hm[r * W + c];
+        const float s = sigmoid(v);
+        if (s < score_thresh) continue;
+        // local-maxima NMS: keep cell only if no neighbour (same class) is greater
+        bool is_max = true;
+        for (int dr = -pad; dr <= pad && is_max; ++dr) {
+          for (int dc = -pad; dc <= pad; ++dc) {
+            int rr = r + dr, cc = c + dc;
+            if (rr < 0 || rr >= H || cc < 0 || cc >= W) continue;
+            if (hm[rr * W + cc] > v) {
+              is_max = false;
+              break;
+            }
+          }
+        }
+        if (!is_max) continue;
+
+        const int idx = r * W + c;
+        DetBox b;
+        b.x = x_min + (r + 0.5f) * cell_x + offset[idx];               // cell centre + dx
+        b.y = y_min + (c + 0.5f) * cell_y + offset[HW + idx];          // cell centre + dy
+        b.length = std::exp(size[idx]);
+        b.width = std::exp(size[HW + idx]);
+        b.heading = std::atan2(heading[idx], heading[HW + idx]);       // atan2(sin, cos)
+        b.score = s;
+        b.cls = k;
+        cand.push_back(b);
+      }
+    }
+  }
+
+  // greedy center-distance NMS (same as the DETR path / python viz)
+  std::sort(cand.begin(), cand.end(), [](const DetBox& a, const DetBox& b) { return a.score > b.score; });
+  std::vector<DetBox> kept;
+  std::vector<char> removed(cand.size(), 0);
+  for (size_t i = 0; i < cand.size(); ++i) {
+    if (removed[i]) continue;
+    kept.push_back(cand[i]);
+    for (size_t j = i + 1; j < cand.size(); ++j) {
+      if (removed[j]) continue;
+      float dx = cand[i].x - cand[j].x, dy = cand[i].y - cand[j].y;
+      if (std::sqrt(dx * dx + dy * dy) < nms_dist) removed[j] = 1;
+    }
+  }
+  return kept;
+}
+
 std::vector<uint8_t> decode_segmentation(const std::vector<float>& logits, int C, int H, int W) {
   std::vector<uint8_t> out(static_cast<size_t>(H) * W, 0);
   const int HW = H * W;

@@ -131,20 +131,39 @@ class PlanningHeadExport(nn.Module):
         return out["scores"], out["selected_trajectory"]
 
 
+# CenterPoint engine I/O: 4 dense conv maps (decode runs on the C++ host).
+DET_CENTERPOINT_OUTPUTS = ["det_heatmap", "det_offset", "det_size", "det_heading"]
+
+
 class DetHeadExport(nn.Module):
-    """det pool/downscale + transformer decoder + MultiClassAgentHead."""
+    """Detection head -> ONNX. Two variants by ``model._det_head_type``:
+
+      * "centerpoint": dense conv head over F_env -> (heatmap, offset, size,
+        heading) maps. Input is fenv ONLY (no status). The peak decode
+        (sigmoid -> maxpool-NMS -> top-K -> box) is done on the C++ host, so the
+        TRT engine stays pure convolutions (no TopK/Gather/Scatter).
+      * "detr": legacy pooled-token transformer decoder -> (agent_states,
+        agent_class_logits). Input is (fenv, status).
+    """
 
     def __init__(self, model, fenv_hw):
         super().__init__()
-        self.det_pool = FixedAdaptiveAvgPool2d(fenv_hw, _out_size(model.det_pool))
-        self.det_downscale = model.det_downscale
-        self.det_status_encoding = model.det_status_encoding
-        self.det_keyval_embedding = model.det_keyval_embedding
-        self.det_query_embedding = model.det_query_embedding
-        self.det_decoder = model.det_decoder
-        self.agent_head = model.agent_head
+        self.centerpoint = getattr(model, "_det_head_type", "detr") == "centerpoint"
+        if self.centerpoint:
+            self.det_head = model.det_head
+        else:
+            self.det_pool = FixedAdaptiveAvgPool2d(fenv_hw, _out_size(model.det_pool))
+            self.det_downscale = model.det_downscale
+            self.det_status_encoding = model.det_status_encoding
+            self.det_keyval_embedding = model.det_keyval_embedding
+            self.det_query_embedding = model.det_query_embedding
+            self.det_decoder = model.det_decoder
+            self.agent_head = model.agent_head
 
-    def forward(self, fenv, status):
+    def forward(self, fenv, status=None):
+        if self.centerpoint:
+            m = self.det_head(fenv)  # dense maps; decode happens host-side in C++
+            return m["det_heatmap"], m["det_offset"], m["det_size"], m["det_heading"]
         B = fenv.shape[0]
         tokens = self.det_downscale(self.det_pool(fenv)).flatten(-2, -1).permute(0, 2, 1)
         status_enc = self.det_status_encoding(status)
@@ -332,10 +351,11 @@ def dump_cpp_sample(out_dir, model, feats, cam_bev, lidar_bev, fenv, status, fen
 
     print("references (PyTorch per-stage):")
     dev = fenv.device  # FixedAdaptiveAvgPool2d registers its pool buffers on CPU
+    det_export = DetHeadExport(model, fenv_hw).to(dev) if use_det else None
     with torch.no_grad():
         scores, traj = PlanningHeadExport(model.planning_head, fenv_hw).to(dev)(fenv, status)
         seg_logits = SegHeadExport(model.seg_head).to(dev)(fenv)
-        det_out = DetHeadExport(model, fenv_hw).to(dev)(fenv, status) if use_det else None
+        det_out = det_export(fenv, status) if det_export is not None else None
 
     _save_tensor(ref / "lidar_bev.tensor", _to_numpy(lidar_bev).astype(np.float32))
     _save_tensor(ref / "cam_bev.tensor", _to_numpy(cam_bev).astype(np.float32))
@@ -344,8 +364,12 @@ def dump_cpp_sample(out_dir, model, feats, cam_bev, lidar_bev, fenv, status, fen
     _save_tensor(ref / "trajectory.tensor", _to_numpy(traj).astype(np.float32))
     _save_tensor(ref / "bev_semantic_logits.tensor", _to_numpy(seg_logits).astype(np.float32))
     if det_out is not None:
-        _save_tensor(ref / "agent_states.tensor", _to_numpy(det_out[0]).astype(np.float32))
-        _save_tensor(ref / "agent_class_logits.tensor", _to_numpy(det_out[1]).astype(np.float32))
+        if det_export.centerpoint:  # 4 dense maps (engine I/O; decode is host-side)
+            for nm, t in zip(DET_CENTERPOINT_OUTPUTS, det_out):
+                _save_tensor(ref / f"{nm}.tensor", _to_numpy(t).astype(np.float32))
+        else:
+            _save_tensor(ref / "agent_states.tensor", _to_numpy(det_out[0]).astype(np.float32))
+            _save_tensor(ref / "agent_class_logits.tensor", _to_numpy(det_out[1]).astype(np.float32))
 
 
 def export_and_check(wrapper, inputs, in_names, out_names, path, simplify=True):
@@ -511,10 +535,15 @@ def main():
         print(f"  [FAIL] planning_head.onnx: {e}")
     # 3) detection head
     if config.use_detection_head:
+        det_export = DetHeadExport(model, fenv_hw)
+        if det_export.centerpoint:  # dense conv maps; decode is host-side in C++
+            det_inputs, det_in_names, det_out_names = (fenv,), ["fenv"], DET_CENTERPOINT_OUTPUTS
+        else:
+            det_inputs, det_in_names, det_out_names = (fenv, status), ["fenv", "status"], \
+                ["agent_states", "agent_class_logits"]
         try:
             export_and_check(
-                DetHeadExport(model, fenv_hw),
-                (fenv, status), ["fenv", "status"], ["agent_states", "agent_class_logits"],
+                det_export, det_inputs, det_in_names, det_out_names,
                 str(out_dir / "det_head.onnx"), simplify,
             )
         except Exception as e:

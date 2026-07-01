@@ -67,7 +67,8 @@ compile camera.backbone   ""           2 2
 compile camera.vtransform "$fp16_flags" 1 1
 compile fuser             "$dyn_flags"  2 1
 compile planning_head     "$fp16_flags" 2 2
-compile det_head          "$fp16_flags" 2 2
+# CenterPoint det head: 1 input (fenv) -> 4 dense maps (heatmap, offset, size, heading)
+compile det_head          "$fp16_flags" 1 4
 compile seg_head          "$fp16_flags" 1 1
 
 echo "Engines built under $build ; SCN runs from $base/lidar.backbone.xyz.onnx"

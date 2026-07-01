@@ -30,6 +30,17 @@ struct DetBox {
 std::vector<DetBox> decode_detections(const std::vector<float>& states, const std::vector<float>& logits, int num_queries,
                                       int num_classes, float score_thresh = 0.2f, float nms_dist = 2.0f);
 
+// CenterPoint host-side decode (mirrors CenterPointHead.decode in PyTorch):
+// per-class heatmap sigmoid -> max-pool NMS (local maxima) -> grid-anchored box
+// (centre = cell centre + offset, size = exp(reg), heading = atan2(sin,cos)) ->
+// greedy center-distance NMS. Maps are row-major [C,H,W] over the +/-32 m grid
+// (rows = x forward, cols = y left), matching F_env / the seg head.
+std::vector<DetBox> decode_detections_centerpoint(
+    const std::vector<float>& heatmap, const std::vector<float>& offset, const std::vector<float>& size,
+    const std::vector<float>& heading, int num_classes, int height, int width, float x_min = -32.0f,
+    float y_min = -32.0f, float x_max = 32.0f, float y_max = 32.0f, int nms_kernel = 3, float score_thresh = 0.2f,
+    float nms_dist = 2.0f);
+
 // logits: [C,H,W] row-major. Returns argmax class id per pixel [H*W].
 std::vector<uint8_t> decode_segmentation(const std::vector<float>& logits, int num_classes, int height, int width);
 

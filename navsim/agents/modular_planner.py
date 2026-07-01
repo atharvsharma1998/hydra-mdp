@@ -34,6 +34,13 @@ class PlanningHead(nn.Module):
         num_ego_status=3,
         bev_spatial_shape=(32, 32),
         vocab_dropout_size=2048,
+        scorer_w_imi=0.05,
+        scorer_w_nc=0.5,
+        scorer_w_dac=0.5,
+        scorer_w_ddc=0.5,
+        scorer_w_tlc=0.5,
+        scorer_w_progress=5.0,
+        scorer_w_lk=5.0,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -43,6 +50,19 @@ class PlanningHead(nn.Module):
         self.vocab_path = vocab_path
         self.bev_spatial_shape = bev_spatial_shape
         self.vocab_dropout_size = vocab_dropout_size
+        # Hydra-MDP inference cost weights (Eq. 11). Paper grid-search ranges:
+        #   w1 (imitation) in [0.01, 0.1];  w2 (NC), w3 (DAC) in [0.1, 1];
+        #   w4 (progress bundle) in [1, 10]  -- "prioritize rule-based costs over imitation".
+        # Extension over Hydra-MDP: we additionally score driving_direction_compliance
+        # (DDC), which the paper neglected only because of the NAVSIM metric bug
+        # (issue #14, now fixed). w_ddc shares the compliance range [0.1, 1].
+        self.scorer_w_imi = scorer_w_imi
+        self.scorer_w_nc = scorer_w_nc
+        self.scorer_w_dac = scorer_w_dac
+        self.scorer_w_ddc = scorer_w_ddc
+        self.scorer_w_tlc = scorer_w_tlc
+        self.scorer_w_progress = scorer_w_progress
+        self.scorer_w_lk = scorer_w_lk
 
         self.bev_pool = nn.AdaptiveAvgPool2d(bev_spatial_shape)
         if in_channels != d_model:
@@ -166,17 +186,28 @@ class PlanningHead(nn.Module):
         for name, head in self.heads.items():
             result[name] = head(dist_status).squeeze(-1)
 
-        # 6. Safety Trajectory Selection Scorer
+        # 6. Trajectory selection scorer (Hydra-MDP Eq. 11 + EPDMS-style penalties):
+        #   f_tilde = -( w_imi logS_im + w_NC logS_NC + w_DAC logS_DAC + w_DDC logS_DDC
+        #               + w_TLC logS_TLC + w_prog log(5 S_TTC + 5 S_EP) )  ; select argmax(score)
+        # Penalty terms (NC, DAC, DDC, TLC) follow the EPDMS multiplicative penalties
+        # (here additive in log-sigmoid space). Deviations from the base paper, by design:
+        #   * Comfort (S_C) head is not available here -> bundle is 5 S_TTC + 5 S_EP.
+        #   * DDC + TLC are ADDED back as penalties (Hydra-MDP dropped DDC only due to the
+        #     NAVSIM metric bug #14, now fixed; TLC follows Hydra-MDP++ EPDMS). Set the
+        #     corresponding scorer_w_*=0 to recover the exact base paper scorer.
+        #   * lane_keeping (LK) is added INSIDE the weighted bundle (additive, EPDMS-style),
+        #     NOT as a penalty: a single lane touch should trade off against progress, not
+        #     zero the trajectory. Set scorer_w_lk=0 to drop it.
         scores = (
-            0.03 * result['imi'].softmax(-1).log() +
-            0.1 * result['traffic_light_compliance'].sigmoid().log() +
-            0.1 * result['no_at_fault_collisions'].sigmoid().log() +
-            0.9 * result['drivable_area_compliance'].sigmoid().log() +
-            0.2 * result['driving_direction_compliance'].sigmoid().log() +
-            6.0 * (
-                7.0 * result['time_to_collision_within_bound'].sigmoid() +
-                7.0 * result['ego_progress'].sigmoid() +
-                3.0 * result['lane_keeping'].sigmoid()
+            self.scorer_w_imi * result['imi'].softmax(-1).log() +
+            self.scorer_w_nc * result['no_at_fault_collisions'].sigmoid().log() +
+            self.scorer_w_dac * result['drivable_area_compliance'].sigmoid().log() +
+            self.scorer_w_ddc * result['driving_direction_compliance'].sigmoid().log() +
+            self.scorer_w_tlc * result['traffic_light_compliance'].sigmoid().log() +
+            self.scorer_w_progress * (
+                5.0 * result['time_to_collision_within_bound'].sigmoid() +
+                5.0 * result['ego_progress'].sigmoid() +
+                self.scorer_w_lk * result['lane_keeping'].sigmoid()
             ).log()
         )
 

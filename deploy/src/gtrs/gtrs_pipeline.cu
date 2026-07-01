@@ -98,8 +98,9 @@ Pipeline::Pipeline(const PipelineParam& param) : param_(param) {
   planning_ = std::make_unique<TrtModule>(join(m, "build/planning_head.plan"));
   planning_->declare_outputs({"scores", "trajectory"});
 
+  // CenterPoint detection head: 4 dense conv maps; peak decode runs host-side.
   det_ = std::make_unique<TrtModule>(join(m, "build/det_head.plan"));
-  det_->declare_outputs({"agent_states", "agent_class_logits"});
+  det_->declare_outputs({"det_heatmap", "det_offset", "det_size", "det_heading"});
 
   seg_ = std::make_unique<TrtModule>(join(m, "build/seg_head.plan"));
   seg_->declare_outputs({"bev_semantic_logits"});
@@ -269,7 +270,7 @@ PipelineOutput Pipeline::forward(const std::vector<const void*>& camera_planes, 
   // ---- heads ----
   planning_->forward({{"fenv", fenv}, {"status", status_dev_}}, stream);
   stage("planning");
-  det_->forward({{"fenv", fenv}, {"status", status_dev_}}, stream);
+  det_->forward({{"fenv", fenv}}, stream);  // CenterPoint head reads F_env only
   stage("det");
   seg_->forward({{"fenv", fenv}}, stream);
   stage("seg");
@@ -285,16 +286,20 @@ PipelineOutput Pipeline::forward(const std::vector<const void*>& camera_planes, 
     ++timer_iters_;
   }
 
-  std::vector<float> states, logits, scores, traj, seg_logits;
-  det_->copy_output_to_host("agent_states", states, stream);
-  det_->copy_output_to_host("agent_class_logits", logits, stream);
+  std::vector<float> det_hm, det_off, det_sz, det_hd, scores, traj, seg_logits;
+  det_->copy_output_to_host("det_heatmap", det_hm, stream);
+  det_->copy_output_to_host("det_offset", det_off, stream);
+  det_->copy_output_to_host("det_size", det_sz, stream);
+  det_->copy_output_to_host("det_heading", det_hd, stream);
   planning_->copy_output_to_host("scores", scores, stream);
   planning_->copy_output_to_host("trajectory", traj, stream);
   seg_->copy_output_to_host("bev_semantic_logits", seg_logits, stream);
 
   if (!param_.dump_dir.empty()) {
-    dump_host_float(param_.dump_dir + "/agent_states.tensor", states, det_->output_dims("agent_states"));
-    dump_host_float(param_.dump_dir + "/agent_class_logits.tensor", logits, det_->output_dims("agent_class_logits"));
+    dump_host_float(param_.dump_dir + "/det_heatmap.tensor", det_hm, det_->output_dims("det_heatmap"));
+    dump_host_float(param_.dump_dir + "/det_offset.tensor", det_off, det_->output_dims("det_offset"));
+    dump_host_float(param_.dump_dir + "/det_size.tensor", det_sz, det_->output_dims("det_size"));
+    dump_host_float(param_.dump_dir + "/det_heading.tensor", det_hd, det_->output_dims("det_heading"));
     dump_host_float(param_.dump_dir + "/scores.tensor", scores, planning_->output_dims("scores"));
     dump_host_float(param_.dump_dir + "/trajectory.tensor", traj, planning_->output_dims("trajectory"));
     dump_host_float(param_.dump_dir + "/bev_semantic_logits.tensor", seg_logits,
@@ -302,7 +307,10 @@ PipelineOutput Pipeline::forward(const std::vector<const void*>& camera_planes, 
   }
 
   PipelineOutput out;
-  out.detections = decode_detections(states, logits, /*Q=*/30, /*K=*/5);
+  auto hm_dims = det_->output_dims("det_heatmap");  // [1, K, H, W]
+  int det_k = hm_dims[1], det_h = hm_dims[2], det_w = hm_dims[3];
+  out.detections = decode_detections_centerpoint(det_hm, det_off, det_sz, det_hd, det_k, det_h, det_w,
+                                                 -32.0f, -32.0f, 32.0f, 32.0f);
   out.plan = decode_plan(traj, /*P=*/40, scores);
   auto seg_dims = seg_->output_dims("bev_semantic_logits");  // [1,7,256,256]
   out.seg_h = seg_dims[2];

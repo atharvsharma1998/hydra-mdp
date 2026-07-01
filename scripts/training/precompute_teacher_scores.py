@@ -49,7 +49,12 @@ def init_worker(maps_path_str, vocab_path_str, output_cache_path_str):
     os.environ["NUPLAN_MAPS_ROOT"] = maps_path_str
     _VOCAB = np.load(vocab_path_str)
     
-    sampling = TrajectorySampling(time_horizon=4.0, interval_length=0.5)
+    # The GTRS/NVIDIA vocab (traj_final/8192.npy) is 40 poses over 4 s at 0.1 s
+    # spacing (10 Hz). The PDM scorer MUST run at the vocab's native resolution:
+    # at 0.5 s / 8 poses the simulator truncates each trajectory to its first ~0.8 s
+    # (states[:, :num_poses+1]) and TTC silently disables itself (its hardcoded 10 Hz
+    # 1 s lookahead needs >=9 poses, so num_poses=8 -> empty eval loop -> TTC==1.0).
+    sampling = TrajectorySampling(time_horizon=4.0, interval_length=0.1)
     _SIMULATOR = PDMSimulator(sampling)
     _SCORER = PDMScorer(sampling, config=PDMScorerConfig(human_penalty_filter=False))
     _PROCESSOR = MetricCacheProcessor(cache_path=None, force_feature_computation=True, proposal_sampling=sampling)
@@ -110,15 +115,15 @@ def process_scene_worker(args):
         dx = np.diff(trajectory_states[:, :, 0], axis=1) # [8192, 40]
         dy = np.diff(trajectory_states[:, :, 1], axis=1) # [8192, 40]
         dist = np.hypot(dx, dy)
-        speed = dist / 0.5 # dt = 0.5s
+        speed = dist / 0.1 # dt = 0.1s (vocab is 10 Hz)
         
         trajectory_states[:, 1:, 3] = speed * np.cos(yaw_global) # VELOCITY_X
         trajectory_states[:, 1:, 4] = speed * np.sin(yaw_global) # VELOCITY_Y
         
         dvx = np.diff(trajectory_states[:, :, 3], axis=1) # [8192, 40]
         dvy = np.diff(trajectory_states[:, :, 4], axis=1) # [8192, 40]
-        trajectory_states[:, 1:-1, 5] = dvx[:, 1:] / 0.5 # ACCELERATION_X
-        trajectory_states[:, 1:-1, 6] = dvy[:, 1:] / 0.5 # ACCELERATION_Y
+        trajectory_states[:, 1:-1, 5] = dvx[:, 1:] / 0.1 # ACCELERATION_X
+        trajectory_states[:, 1:-1, 6] = dvy[:, 1:] / 0.1 # ACCELERATION_Y
         trajectory_states[:, -1, 5] = trajectory_states[:, -2, 5]
         trajectory_states[:, -1, 6] = trajectory_states[:, -2, 6]
         
@@ -207,6 +212,11 @@ def main():
         "--sensor-blobs-path", type=str, default=None,
         help="If set, only score tokens whose log has downloaded sensors (i.e. navtrain).",
     )
+    parser.add_argument(
+        "--filter-tokens-dir", type=str, default=None,
+        help="Only score tokens that already have a <token>.pkl in this dir (e.g. the "
+             "previous cache). Regenerates EXACTLY the training set instead of all trainval.",
+    )
     args = parser.parse_args()
 
     print("=== Precomputing Hydra-MDP Teacher Scores (Multiprocessing) ===")
@@ -274,6 +284,16 @@ def main():
         worker_args = [w for w in worker_args if Path(w[1]).stem in logs_with_sensors]
         print(f"Sensor filter: {len(worker_args)}/{before} scenes in navtrain logs "
               f"({len(logs_with_sensors)} logs with sensors).")
+
+    # Restrict to tokens already present in a reference cache dir (e.g. the previous,
+    # now-stale cache). This regenerates exactly the set training consumes, avoiding
+    # the full trainval (~48k scenes) when only the navtrain subset (~3.7k) is needed.
+    if args.filter_tokens_dir:
+        keep = {p.stem for p in Path(args.filter_tokens_dir).glob("*.pkl")}
+        before = len(worker_args)
+        worker_args = [w for w in worker_args if w[0] in keep]
+        print(f"Token filter: {len(worker_args)}/{before} scenes match {args.filter_tokens_dir} "
+              f"({len(keep)} reference tokens).")
 
     if args.limit and args.limit > 0:
         worker_args = worker_args[: args.limit]

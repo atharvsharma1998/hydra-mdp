@@ -118,12 +118,18 @@ def main():
                    help="render this many CONSECUTIVE scenes from the start index (+ a GIF)")
     p.add_argument("--all", action="store_true",
                    help="render EVERY sensor token in the split (overrides --num-frames/--scene-index)")
+    p.add_argument("--eval-mode", action="store_true",
+                   help="run model.eval() (full 8192 vocab + running BN stats); correct for "
+                        "well-trained checkpoints. Default train mode enables vocab dropout.")
     p.add_argument("--show-gt-boxes", action="store_true",
                    help="also draw ground-truth detection boxes (default: predicted only)")
     p.add_argument("--score-thresh", type=float, default=0.2,
                    help="min foreground (non-background) class prob to draw a predicted box")
     p.add_argument("--nms-dist", type=float, default=2.0,
                    help="suppress lower-score predicted boxes within this many meters (center NMS)")
+    p.add_argument("--require-cache", type=str, default=None,
+                   help="only render tokens that have a <token>.pkl in this teacher-cache dir "
+                        "(i.e. the training set) -> fair in-distribution check")
     args = p.parse_args()
 
     ws = Path(args.workspace)
@@ -145,6 +151,13 @@ def main():
         and (sensor_blobs_path / loader.token_to_slice[t][0].name.replace(".pkl", "") / "CAM_F0").is_dir()
     ]
     assert len(tokens) > 0, "no tokens with sensors"
+    if args.require_cache:
+        keep = {p.stem for p in Path(args.require_cache).glob("*.pkl")}
+        before = len(tokens)
+        tokens = [t for t in tokens if t in keep]
+        print(f"--require-cache: {len(tokens)}/{before} sensor tokens have a cache shard "
+              f"in {args.require_cache} ({len(keep)} cache tokens total)")
+        assert len(tokens) > 0, "no sensor tokens overlap the teacher cache (training set)"
     if args.all:
         start, n_frames = 0, len(tokens)
     elif args.token is not None:
@@ -166,9 +179,18 @@ def main():
         missing, unexpected = model.load_state_dict(sd, strict=False)
         print(f"loaded checkpoint {args.checkpoint} (missing={len(missing)} unexpected={len(unexpected)})")
     # NOTE: small-batch/few-step overfit checkpoints have unreliable BatchNorm
-    # running stats; use batch stats (train mode) for a faithful viz. Real
-    # training (large batch, many steps) makes eval-mode stats valid.
-    model.train()
+    # running stats; train mode uses batch stats for a faithful seg/det viz.
+    # BUT train mode also enables planning-head VOCAB DROPOUT (scores only a
+    # random 2048/8192 vocab subset) -> the selected trajectory becomes a random
+    # subset pick, NOT the real eval-time trajectory. Use --eval-mode for a
+    # faithful trajectory (full vocab + running BN stats), which is correct for
+    # well-trained checkpoints.
+    if args.eval_mode:
+        model.eval()
+        print("model in EVAL mode (full 8192 vocab, running BN stats)")
+    else:
+        model.train()
+        print("model in TRAIN mode (batch BN stats; planning uses RANDOM 2048 vocab subset)")
 
     det_classes = list(config.detection_class_names)
     num_det = len(det_classes)
@@ -264,7 +286,7 @@ def main():
                 _draw_boxes_on_img(a, gt_states, gt_mask, gt_classes, _CLS_COLORS, l2c, K, ground_z, box_h, imw, imh, ls="-")
             _draw_boxes_on_img(a, pred_states, pred_mask, pred_classes, _CLS_COLORS, l2c, K, ground_z, box_h, imw, imh, ls="--")
             if gt_traj is not None:
-                _draw_traj_on_img(a, gt_traj, "white", l2c, K, ground_z)
+                _draw_traj_on_img(a, gt_traj, "yellow", l2c, K, ground_z)
             if pred_traj is not None:
                 _draw_traj_on_img(a, pred_traj, "red", l2c, K, ground_z)
             a.set_xlim(0, imw); a.set_ylim(imh, 0)
@@ -279,7 +301,7 @@ def main():
 
         bx = ax[2, 2]
         gt_note = "GT=solid pred=dashed" if args.show_gt_boxes else "pred=dashed"
-        bx.set_title(f"BEV: boxes {gt_note} (color=class) | traj GT=white pred=red")
+        bx.set_title(f"BEV: boxes {gt_note} (color=class) | traj GT=yellow pred=red")
         bx.set_xlim(32, -32); bx.set_ylim(-32, 32)  # left(+y) on left, forward(+x) up
         bx.set_aspect("equal"); bx.grid(True, alpha=0.2)
         ego_l, ego_w = 4.6, 2.0
@@ -292,13 +314,13 @@ def main():
             _draw_boxes_bev(bx, gt_states, gt_mask, gt_classes, ls="-")
         _draw_boxes_bev(bx, pred_states, pred_mask, pred_classes, ls="--")
         if gt_traj is not None:
-            bx.plot(gt_traj[:, 1], gt_traj[:, 0], "-o", color="white", lw=3.5, ms=4, zorder=5)
+            bx.plot(gt_traj[:, 1], gt_traj[:, 0], "-o", color="yellow", lw=3.5, ms=4, zorder=5)
         if pred_traj is not None:
             bx.plot(pred_traj[:, 1], pred_traj[:, 0], "--o", color="red", lw=2, ms=3, zorder=6)
         from matplotlib.lines import Line2D
         handles = [Line2D([0], [0], color=_CLS_COLORS[i % len(_CLS_COLORS)], lw=3, label=n)
                    for i, n in enumerate(det_classes)]
-        handles += [Line2D([0], [0], color="white", marker="o", lw=2, label="GT traj"),
+        handles += [Line2D([0], [0], color="yellow", marker="o", lw=2, label="GT traj"),
                     Line2D([0], [0], color="red", marker="o", lw=2, ls="--", label="pred traj")]
         bx.legend(handles=handles, loc="upper right", fontsize=6, framealpha=0.5)
         plt.tight_layout()
