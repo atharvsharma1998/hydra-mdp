@@ -16,6 +16,8 @@ export NAVSIM_WS="${NAVSIM_WS:-/workspace/navsim_workspace}"
 
 # CUDA-BEVFusion mmdet3d fork that provides ConvFuser / DepthLSSTransform /
 # SparseEncoder. Must be importable; backbone reads BEVFUSION_ROOT.
+# RunPod layout: /workspace/bev-inference/CUDA-BEVFusion/bevfusion
+# (NOT /workspace/bevfusion — that empty stub dir is a common footgun).
 export BEVFUSION_ROOT="${BEVFUSION_ROOT:-/workspace/bev-inference/CUDA-BEVFusion/bevfusion}"
 
 # nuplan-devkit source (editable). On the Debian system Python the `setup.py

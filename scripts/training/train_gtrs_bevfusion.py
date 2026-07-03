@@ -18,6 +18,7 @@ Teacher scores (PDM distillation): two options
                      the Dataset workers).
 """
 import os
+import math
 import argparse
 import warnings
 from pathlib import Path
@@ -281,7 +282,6 @@ def main():
     # cosine schedule with linear warmup (per-epoch stepping)
     scheduler = None
     if args.lr_schedule == "cosine":
-        import math
         warmup = max(args.warmup_epochs, 0)
 
         def lr_lambda(ep):
@@ -346,6 +346,118 @@ def main():
             gt[m] = torch.from_numpy(arr).to(device)
         return gt
 
+    def _tensor_stats(t: torch.Tensor) -> str:
+        """Compact finite/min/max/absmax summary for one tensor."""
+        if not isinstance(t, torch.Tensor) or not t.is_floating_point():
+            return f"non-float shape={getattr(t, 'shape', None)}"
+        flat = t.detach().float().reshape(-1)
+        n = flat.numel()
+        if n == 0:
+            return "empty"
+        finite = torch.isfinite(flat)
+        n_fin = int(finite.sum())
+        n_nan = int(torch.isnan(flat).sum())
+        n_inf = int(torch.isinf(flat).sum())
+        if n_fin == 0:
+            return f"shape={tuple(t.shape)} ALL_NONFINITE nan={n_nan} inf={n_inf}"
+        fin = flat[finite]
+        return (f"shape={tuple(t.shape)} finite={n_fin}/{n} nan={n_nan} inf={n_inf} "
+                f"min={float(fin.min()):.4g} max={float(fin.max()):.4g} "
+                f"absmax={float(fin.abs().max()):.4g}")
+
+    def _nonfinite_param_names(module, limit: int = 12):
+        bad = []
+        for name, p in module.named_parameters():
+            if p is not None and p.numel() > 0 and not torch.isfinite(p).all():
+                bad.append(name)
+                if len(bad) >= limit:
+                    break
+        return bad
+
+    def diagnose_nonfinite(epoch_1b, step, batch_tokens, feats, tgts, preds, losses, where: str):
+        """Log exactly which loss / tensor / input went non-finite. Rank-0 only."""
+        if not is_main:
+            return
+        lines = [
+            f"[FATAL-DIAG] where={where} epoch={epoch_1b} global_step={step} "
+            f"rank={rank} amp={args.amp} lr={optimizer.param_groups[0]['lr']:.3e}",
+            f"[FATAL-DIAG] tokens={list(batch_tokens) if batch_tokens is not None else None}",
+        ]
+        # Per-loss breakdown (which head blew first)
+        for k in sorted(losses):
+            v = losses[k]
+            try:
+                fv = float(v.detach()) if torch.is_tensor(v) else float(v)
+            except Exception:
+                fv = "<?>"
+            ok = bool(torch.isfinite(v).all()) if torch.is_tensor(v) else math.isfinite(fv)
+            lines.append(f"[FATAL-DIAG] loss.{k}={'OK' if ok else 'BAD'} value={fv}")
+
+        # Predictions (localize head vs backbone)
+        for k, v in sorted(preds.items(), key=lambda kv: kv[0]):
+            if not torch.is_tensor(v) or not v.is_floating_point():
+                continue
+            if not torch.isfinite(v).all():
+                lines.append(f"[FATAL-DIAG] pred.{k} BAD {_tensor_stats(v)}")
+
+        # Inputs
+        for k, v in feats.items():
+            if k == "lidar":
+                for i, pts in enumerate(v):
+                    if torch.is_tensor(pts) and pts.is_floating_point() and not torch.isfinite(pts).all():
+                        lines.append(f"[FATAL-DIAG] feat.lidar[{i}] BAD {_tensor_stats(pts)}")
+            elif torch.is_tensor(v) and v.is_floating_point() and not torch.isfinite(v).all():
+                lines.append(f"[FATAL-DIAG] feat.{k} BAD {_tensor_stats(v)}")
+
+        # Targets / teacher scores
+        for k, v in tgts.items():
+            if k == "gt_scores":
+                for mk, mv in v.items():
+                    if torch.is_tensor(mv) and not torch.isfinite(mv).all():
+                        lines.append(f"[FATAL-DIAG] tgt.gt_scores.{mk} BAD {_tensor_stats(mv)}")
+            elif torch.is_tensor(v) and v.is_floating_point() and not torch.isfinite(v).all():
+                lines.append(f"[FATAL-DIAG] tgt.{k} BAD {_tensor_stats(v)}")
+
+        # Were weights already poisoned before this step?
+        bad_params = _nonfinite_param_names(core_model)
+        if bad_params:
+            lines.append(f"[FATAL-DIAG] model params ALREADY non-finite "
+                         f"(count>={len(bad_params)}): {bad_params}")
+        else:
+            lines.append("[FATAL-DIAG] model params still finite at abort "
+                         "(poison would come from applying this step's grads)")
+
+        # AMP scaler state
+        if args.amp and scaler is not None:
+            try:
+                lines.append(f"[FATAL-DIAG] grad_scaler_scale={float(scaler.get_scale()):.4g}")
+            except Exception:
+                pass
+
+        lines.append(
+            f"[FATAL-DIAG] Aborting to protect credits. Resume from "
+            f"{args.run_name}_best.pth / _epochN.pth — NOT _latest if it was "
+            f"written after a poisoned step."
+        )
+        for line in lines:
+            log(line)
+
+    def abort_training():
+        if ddp:
+            try:
+                dist.barrier()
+            except Exception:
+                pass
+            try:
+                dist.destroy_process_group()
+            except Exception:
+                pass
+        if log_fh:
+            log_fh.close()
+        if tb_writer is not None:
+            tb_writer.close()
+        raise SystemExit(1)
+
     global_step = start_epoch * len(loader)
     best_loss = float("inf")  # track lowest mean epoch loss for the "best" checkpoint
     for epoch in range(start_epoch, args.epochs):
@@ -363,16 +475,30 @@ def main():
             with torch.cuda.amp.autocast(enabled=args.amp):
                 preds = model(feats)
                 losses = gtrs_bevfusion_loss(tgts, preds, config, core_model.planning_head)
-            scaler.scale(losses["loss_total"]).backward()
+            loss_total = losses["loss_total"]
+            # Abort immediately on non-finite loss. Continuing would poison weights,
+            # overwrite good checkpoints with NaN, and burn GPU credits for nothing.
+            if not torch.isfinite(loss_total):
+                diagnose_nonfinite(epoch + 1, global_step, batch_tokens, feats, tgts,
+                                   preds, losses, where="pre_backward_loss")
+                abort_training()
+            scaler.scale(loss_total).backward()
             if args.grad_clip > 0:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             scaler.step(optimizer)
             scaler.update()
+            # Catch the case your run hit: loss looked finite but the Adam/AMP
+            # update still wrote non-finite weights (epoch8/latest were poisoned).
+            bad_params = _nonfinite_param_names(core_model, limit=1)
+            if bad_params:
+                diagnose_nonfinite(epoch + 1, global_step, batch_tokens, feats, tgts,
+                                   preds, losses, where="post_optimizer_step_weights")
+                abort_training()
             for k, v in losses.items():
                 agg[k] = agg.get(k, 0.0) + float(v)
             if tb_writer is not None:
-                tb_writer.add_scalar("step/loss_total", float(losses["loss_total"]), global_step)
+                tb_writer.add_scalar("step/loss_total", float(loss_total), global_step)
             global_step += 1
         if scheduler is not None:
             scheduler.step()
@@ -387,6 +513,19 @@ def main():
             tb_writer.flush()
 
         if is_main:
+            epoch_loss = agg["loss_total"] / len(loader)
+            # Never persist a non-finite epoch (defensive; step-level abort should
+            # already have exited). Protects _latest / _best / _epochN from NaN.
+            if not math.isfinite(epoch_loss):
+                log(f"[FATAL] epoch {epoch+1} mean loss is non-finite ({epoch_loss}); "
+                    f"skipping checkpoint save and aborting.")
+                if ddp:
+                    dist.destroy_process_group()
+                if log_fh:
+                    log_fh.close()
+                if tb_writer is not None:
+                    tb_writer.close()
+                raise SystemExit(1)
             state = {
                 "epoch": epoch,
                 "state_dict": core_model.state_dict(),
@@ -399,7 +538,6 @@ def main():
             # keep only the BEST checkpoint (lowest mean epoch loss); overwrites a single
             # file so disk stays bounded. Intermediate epoch{N}.pth snapshots are only
             # written when --save-every > 0 is explicitly requested (default: off).
-            epoch_loss = agg["loss_total"] / len(loader)
             if epoch_loss < best_loss:
                 best_loss = epoch_loss
                 torch.save(state, ckpt_dir / f"{args.run_name}_best.pth")
