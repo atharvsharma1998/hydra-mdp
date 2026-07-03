@@ -7,8 +7,12 @@
 #   export PYTHON=/runpod-volume/venv/bin/python
 
 # --- repo + workspace --------------------------------------------------------
-# NAVSIM_REPO = the navsim repo root (parent of this cloud/ dir), resolved robustly.
-export NAVSIM_REPO="${NAVSIM_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# NAVSIM_REPO = parent of this cloud/ dir (wherever you launched cloud/*.sh from).
+# Always resolve from this file's location — do NOT honor a stale NAVSIM_REPO=/opt/...
+# left in the shell from an earlier session (that silently runs the image-baked
+# code without FATAL-DIAG / NaN abort). Override only via NAVSIM_REPO_OVERRIDE.
+_SCRIPT_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export NAVSIM_REPO="${NAVSIM_REPO_OVERRIDE:-$_SCRIPT_REPO}"
 
 # NAVSIM_WS = workspace dir on the persistent network volume (logs, sensors,
 # maps, caches, checkpoints all live here so they survive pod restarts).

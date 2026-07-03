@@ -182,6 +182,12 @@ def main():
 
     if is_main:
         print(f"Device: {device} | world_size: {world_size} | sensor blobs: {sensor_blobs_path}")
+        # Makes /opt vs /workspace mixups obvious in the log.
+        print(f"Trainer script: {Path(__file__).resolve()} | amp={args.amp} | "
+              f"nan_abort=FATAL-DIAG", flush=True)
+        # Makes /opt vs /workspace mixups obvious in the log.
+        print(f"Trainer script: {Path(__file__).resolve()} | amp={args.amp} | "
+              f"nan_abort=FATAL-DIAG", flush=True)
 
     # GTRS-style teacher scores: load the single big pickle ONCE per process.
     # NOTE: under DDP each rank loads its own copy (~30 GB), so a 4-GPU node
@@ -472,9 +478,12 @@ def main():
             if teacher_full is not None and batch_tokens is not None:
                 tgts["gt_scores"] = build_gt_scores(batch_tokens)
             optimizer.zero_grad()
+            # Production AMP pattern: forward in fp16, losses in fp32. Keeps the
+            # backbone speedup while avoiding fp16 overflow in focal/CE/log paths
+            # that poisoned weights at epoch 8 on full navtrain.
             with torch.cuda.amp.autocast(enabled=args.amp):
                 preds = model(feats)
-                losses = gtrs_bevfusion_loss(tgts, preds, config, core_model.planning_head)
+            losses = gtrs_bevfusion_loss(tgts, preds, config, core_model.planning_head)
             loss_total = losses["loss_total"]
             # Abort immediately on non-finite loss. Continuing would poison weights,
             # overwrite good checkpoints with NaN, and burn GPU credits for nothing.
