@@ -56,7 +56,7 @@ TRAIN_ARGS=(scripts/training/train_gtrs_bevfusion.py
   --maps-path "$NUPLAN_MAPS_ROOT"
   --sensor-blobs-path "$TRAINVAL_SENSORS"
   --teacher-pkl "$TEACHER_PKL"
-  --num-scenes 0
+  --num-scenes "${NUM_SCENES:-0}"
   --epochs "$EPOCHS"
   --batch-size "$BATCH"
   --lr "$LR"
