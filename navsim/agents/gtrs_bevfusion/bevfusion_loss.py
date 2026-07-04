@@ -200,7 +200,8 @@ def _lovasz_grad(gt_sorted: torch.Tensor) -> torch.Tensor:
     p = len(gt_sorted)
     gts = gt_sorted.sum()
     intersection = gts - gt_sorted.float().cumsum(0)
-    union = gts + (1 - gt_sorted).float().cumsum(0)
+    # clamp: empty prefix unions are 0 and would yield NaN in intersection/union
+    union = (gts + (1 - gt_sorted).float().cumsum(0)).clamp(min=1e-6)
     jaccard = 1.0 - intersection / union
     if p > 1:
         jaccard[1:p] = jaccard[1:p] - jaccard[0:-1]
@@ -209,6 +210,8 @@ def _lovasz_grad(gt_sorted: torch.Tensor) -> torch.Tensor:
 
 def lovasz_softmax(probas: torch.Tensor, labels: torch.Tensor, ignore: Optional[int] = None) -> torch.Tensor:
     """probas: [B, C, H, W] softmax probs; labels: [B, H, W] int."""
+    # Always fp32 — AMP forward leaves probs in fp16 where sort/cumsum is fragile.
+    probas = probas.float().clamp(0.0, 1.0)
     B, C, H, W = probas.shape
     probas = probas.permute(0, 2, 3, 1).reshape(-1, C)  # [N, C]
     labels = labels.reshape(-1)  # [N]
@@ -228,14 +231,21 @@ def lovasz_softmax(probas: torch.Tensor, labels: torch.Tensor, ignore: Optional[
         fg_sorted = fg[perm]
         losses.append(torch.dot(errors_sorted, _lovasz_grad(fg_sorted)))
     if len(losses) == 0:
-        return probas.sum() * 0.0
-    return torch.stack(losses).mean()
+        return probas.new_zeros(())
+    out = torch.stack(losses).mean()
+    # Defensive: never let a single Lovasz edge case poison the whole step.
+    if not torch.isfinite(out):
+        return probas.new_zeros(())
+    return out
 
 
 def _seg_loss(targets, predictions, config) -> torch.Tensor:
-    logits = predictions["bev_semantic_map"]  # [B, C, H, W]
+    # MUST be fp32: AMP forward leaves seg logits in fp16. Softmax + Lovasz on
+    # extreme fp16 values produced NaN at epoch 8 (only loss_bev_semantic BAD;
+    # det/planning OK; weights still finite). Seen on tokens cafed437eec155a1 etc.
+    logits = predictions["bev_semantic_map"].float()  # [B, C, H, W]
     gt = targets["bev_semantic_map"].long()  # [B, H, W]
-    weight = torch.tensor(config.bev_class_weights, dtype=logits.dtype, device=logits.device)
+    weight = torch.tensor(config.bev_class_weights, dtype=torch.float32, device=logits.device)
     ce = F.cross_entropy(logits, gt, weight=weight)
     lov = lovasz_softmax(logits.softmax(dim=1), gt)
     return ce + config.lovasz_loss_weight * lov
