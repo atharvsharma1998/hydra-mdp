@@ -198,17 +198,20 @@ class PlanningHead(nn.Module):
         #   * lane_keeping (LK) is added INSIDE the weighted bundle (additive, EPDMS-style),
         #     NOT as a penalty: a single lane touch should trade off against progress, not
         #     zero the trajectory. Set scorer_w_lk=0 to drop it.
+        # log() args are clamped to a small eps: a saturated sigmoid (~0) or an
+        # underflowed softmax prob would give log(0) = -inf, making scores non-finite.
+        _eps = 1e-6
         scores = (
-            self.scorer_w_imi * result['imi'].softmax(-1).log() +
-            self.scorer_w_nc * result['no_at_fault_collisions'].sigmoid().log() +
-            self.scorer_w_dac * result['drivable_area_compliance'].sigmoid().log() +
-            self.scorer_w_ddc * result['driving_direction_compliance'].sigmoid().log() +
-            self.scorer_w_tlc * result['traffic_light_compliance'].sigmoid().log() +
+            self.scorer_w_imi * result['imi'].softmax(-1).clamp_min(_eps).log() +
+            self.scorer_w_nc * result['no_at_fault_collisions'].sigmoid().clamp_min(_eps).log() +
+            self.scorer_w_dac * result['drivable_area_compliance'].sigmoid().clamp_min(_eps).log() +
+            self.scorer_w_ddc * result['driving_direction_compliance'].sigmoid().clamp_min(_eps).log() +
+            self.scorer_w_tlc * result['traffic_light_compliance'].sigmoid().clamp_min(_eps).log() +
             self.scorer_w_progress * (
                 5.0 * result['time_to_collision_within_bound'].sigmoid() +
                 5.0 * result['ego_progress'].sigmoid() +
                 self.scorer_w_lk * result['lane_keeping'].sigmoid()
-            ).log()
+            ).clamp_min(_eps).log()
         )
 
         selected_indices = scores.argmax(dim=1)

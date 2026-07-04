@@ -330,8 +330,14 @@ class GTRSBevfusionModel(nn.Module):
 
         output: Dict[str, torch.Tensor] = {}
 
-        # planning
-        plan = self.planning_head(fenv, status_feature)
+        # planning — run in fp32. The planning head's transformer cross-attention
+        # (softmax over 2048 vocab) + scorer log/sigmoid overflow in fp16 once the
+        # weights grow, producing ALL-NaN head outputs (pred.imi/scores/... every
+        # entry nan) while det/seg stay finite (they read fenv directly, no
+        # attention/softmax). This was the epoch-8 "everything nan" at step ~3072.
+        # Conv backbone stays in AMP; only this fp16-fragile block is upcast.
+        with torch.cuda.amp.autocast(enabled=False):
+            plan = self.planning_head(fenv.float(), status_feature.float())
         selected_trajectory = plan["selected_trajectory"]
         if selected_trajectory.shape[1] == 40:
             selected_trajectory = selected_trajectory[:, 4::5]
