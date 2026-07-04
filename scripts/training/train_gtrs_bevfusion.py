@@ -381,10 +381,16 @@ def main():
                     break
         return bad
 
+    def _sync_bad_flag(local_bad: bool) -> bool:
+        """True if ANY rank reports bad. Keeps DDP ranks in lock-step (no NCCL hang)."""
+        if not ddp:
+            return local_bad
+        t = torch.tensor([1 if local_bad else 0], device=device, dtype=torch.int32)
+        dist.all_reduce(t, op=dist.ReduceOp.MAX)
+        return bool(t.item())
+
     def diagnose_nonfinite(epoch_1b, step, batch_tokens, feats, tgts, preds, losses, where: str):
-        """Log exactly which loss / tensor / input went non-finite. Rank-0 only."""
-        if not is_main:
-            return
+        """Log exactly which loss / tensor / input went non-finite (every bad rank)."""
         lines = [
             f"[FATAL-DIAG] where={where} epoch={epoch_1b} global_step={step} "
             f"rank={rank} amp={args.amp} lr={optimizer.param_groups[0]['lr']:.3e}",
@@ -441,18 +447,16 @@ def main():
             except Exception:
                 pass
 
-        lines.append(
-            f"[FATAL-DIAG] Aborting to protect credits. Resume from "
-            f"{args.run_name}_best.pth / _epochN.pth — NOT _latest if it was "
-            f"written after a poisoned step."
-        )
         for line in lines:
-            log(line)
+            # Print on every rank that diagnoses (non-rank0 NaN was invisible before).
+            print(line, flush=True)
+            if log_fh:
+                log_fh.write(line + "\n")
+                log_fh.flush()
 
     def abort_training():
-        # Do NOT dist.barrier() here: only the rank that hit NaN enters this path;
-        # other ranks keep training and a barrier hangs forever while GPUs burn.
-        # Kill the whole process group (torchrun + all ranks + dataloader workers).
+        # All ranks must call this together (after _sync_bad_flag). Solo abort on
+        # one rank leaves siblings stuck in NCCL allreduce for 30min (seen in logs).
         try:
             if log_fh:
                 log_fh.flush()
@@ -464,10 +468,11 @@ def main():
                 tb_writer.close()
         except Exception:
             pass
-        try:
-            os.killpg(os.getpgid(0), signal.SIGKILL)
-        except Exception:
-            pass
+        if ddp:
+            try:
+                dist.destroy_process_group()
+            except Exception:
+                pass
         os._exit(1)
 
     global_step = start_epoch * len(loader)
@@ -491,24 +496,32 @@ def main():
                 preds = model(feats)
             losses = gtrs_bevfusion_loss(tgts, preds, config, core_model.planning_head)
             loss_total = losses["loss_total"]
-            # Abort immediately on non-finite loss. Continuing would poison weights,
-            # overwrite good checkpoints with NaN, and burn GPU credits for nothing.
-            if not torch.isfinite(loss_total):
+            # DDP-safe: every rank must take the same branch. If only one rank
+            # aborts, the others hang in backward allreduce until NCCL's 30min
+            # timeout (exactly the failure in 20260704_000928.out).
+            local_bad_loss = not bool(torch.isfinite(loss_total))
+            if local_bad_loss:
                 diagnose_nonfinite(epoch + 1, global_step, batch_tokens, feats, tgts,
                                    preds, losses, where="pre_backward_loss")
-                abort_training()
+            if _sync_bad_flag(local_bad_loss):
+                log(f"[WARN] non-finite loss on some rank at epoch {epoch+1} "
+                    f"step {global_step}; skipping optimizer step (weights unchanged)")
+                optimizer.zero_grad(set_to_none=True)
+                global_step += 1
+                continue
             scaler.scale(loss_total).backward()
             if args.grad_clip > 0:
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             scaler.step(optimizer)
             scaler.update()
-            # Catch the case your run hit: loss looked finite but the Adam/AMP
-            # update still wrote non-finite weights (epoch8/latest were poisoned).
-            bad_params = _nonfinite_param_names(core_model, limit=1)
-            if bad_params:
+            # Weights poisoned on any rank → all ranks abort together.
+            local_poison = bool(_nonfinite_param_names(core_model, limit=1))
+            if local_poison:
                 diagnose_nonfinite(epoch + 1, global_step, batch_tokens, feats, tgts,
                                    preds, losses, where="post_optimizer_step_weights")
+            if _sync_bad_flag(local_poison):
+                log(f"[FATAL] non-finite weights after step {global_step}; aborting all ranks")
                 abort_training()
             for k, v in losses.items():
                 agg[k] = agg.get(k, 0.0) + float(v)
