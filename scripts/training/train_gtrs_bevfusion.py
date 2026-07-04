@@ -19,6 +19,7 @@ Teacher scores (PDM distillation): two options
 """
 import os
 import math
+import signal
 import argparse
 import warnings
 from pathlib import Path
@@ -449,20 +450,25 @@ def main():
             log(line)
 
     def abort_training():
-        if ddp:
-            try:
-                dist.barrier()
-            except Exception:
-                pass
-            try:
-                dist.destroy_process_group()
-            except Exception:
-                pass
-        if log_fh:
-            log_fh.close()
-        if tb_writer is not None:
-            tb_writer.close()
-        raise SystemExit(1)
+        # Do NOT dist.barrier() here: only the rank that hit NaN enters this path;
+        # other ranks keep training and a barrier hangs forever while GPUs burn.
+        # Kill the whole process group (torchrun + all ranks + dataloader workers).
+        try:
+            if log_fh:
+                log_fh.flush()
+                log_fh.close()
+        except Exception:
+            pass
+        try:
+            if tb_writer is not None:
+                tb_writer.close()
+        except Exception:
+            pass
+        try:
+            os.killpg(os.getpgid(0), signal.SIGKILL)
+        except Exception:
+            pass
+        os._exit(1)
 
     global_step = start_epoch * len(loader)
     best_loss = float("inf")  # track lowest mean epoch loss for the "best" checkpoint
