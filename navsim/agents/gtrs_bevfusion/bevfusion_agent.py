@@ -61,7 +61,19 @@ class GTRSBevfusionAgent(AbstractAgent):
     def initialize(self) -> None:
         if self._checkpoint_path is not None and os.path.exists(self._checkpoint_path):
             state_dict = torch.load(self._checkpoint_path, map_location="cpu")["state_dict"]
-            self.load_state_dict({k.replace("agent.", ""): v for k, v in state_dict.items()})
+            # Training saves the raw GTRSBevfusionModel weights (keys like
+            # "backbone...", "planning_head..."). Normalize any wrapper prefixes
+            # ("agent." from a Lightning module, "_model." from the agent) so the
+            # weights load straight into self._model regardless of save format.
+            normalized = {}
+            for k, v in state_dict.items():
+                nk = k
+                if nk.startswith("agent."):
+                    nk = nk[len("agent."):]
+                if nk.startswith("_model."):
+                    nk = nk[len("_model."):]
+                normalized[nk] = v
+            self._model.load_state_dict(normalized)
         if torch.cuda.is_available():
             self._model = self._model.cuda()
         self._model.eval()
