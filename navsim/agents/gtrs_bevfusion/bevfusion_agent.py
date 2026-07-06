@@ -62,6 +62,9 @@ class GTRSBevfusionAgent(AbstractAgent):
         if self._checkpoint_path is not None and os.path.exists(self._checkpoint_path):
             state_dict = torch.load(self._checkpoint_path, map_location="cpu")["state_dict"]
             self.load_state_dict({k.replace("agent.", ""): v for k, v in state_dict.items()})
+        if torch.cuda.is_available():
+            self._model = self._model.cuda()
+        self._model.eval()
 
     def get_sensor_config(self) -> SensorConfig:
         # cameras + lidar at the current frame only (idx = num_history_frames-1).
