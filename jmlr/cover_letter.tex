@@ -1,0 +1,72 @@
+% JMLR MLOSS cover letter — compile separately or paste into submission portal.
+% Required at submission: https://jmlr.csail.mit.edu/manudb/
+% MLOSS instructions: https://www.jmlr.org/mloss/mloss-info.html
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\begin{document}
+\noindent\textbf{Cover letter for JMLR MLOSS submission}
+
+\medskip
+\noindent\textbf{This submission is intended for the JMLR Machine Learning Open Source Software (MLOSS) track.}
+
+\medskip
+\noindent Manuscript title: \textit{SOPHI: An Open End-to-End Camera--LiDAR Planning Stack with Sparse-Convolution Inference for NAVSIM}
+
+\medskip
+\noindent\textbf{1. Overlap with prior publication.} This manuscript describes open-source software for training, evaluating, and deploying a camera--LiDAR fused BEV planner on NAVSIM, including an open sparse-convolution LiDAR runtime that replaces NVIDIA CUDA-BEVFusion's closed \texttt{libspconv} path, multi-head ONNX/TensorRT export (planning + detection + BEV segmentation), and a documented reproducibility cookbook. No portion has appeared in a journal. Related public artifacts (CUDA-BEVFusion, Hydra-MDP/GTRS, NAVSIM, \texttt{spconv}) are cited and distinguished from our integration and deployment contributions.
+
+\medskip
+\noindent\textbf{2. Co-author consent.} This is a single-author submission. The author confirms the manuscript and consents to its review by JMLR.
+
+\medskip
+\noindent\textbf{3. Conflicts of interest.} None declared.
+
+\medskip
+\noindent\textbf{4. Open-source license.} Apache License 2.0 (see \texttt{LICENSE} in the repository and submission archive).
+
+\medskip
+\noindent\textbf{5. Project URL and version.}
+\begin{itemize}
+  \item Repository: \texttt{https://github.com/atharvsharma1998/hydra-mdp}
+  \item Reviewed version tag: \texttt{v0.1.0-mloss}
+  \item Companion cookbook: \texttt{jmlr/REPRODUCIBILITY.md}
+\end{itemize}
+
+\medskip
+\noindent\textbf{6. Evidence of user community.} The project is public at the URL above with Issues enabled, Apache-2.0 licensing, a tagged release \texttt{v0.1.0-mloss}, and end-user-end documentation (\texttt{README.md}, \texttt{INSTALL.md}, \texttt{docs/REPRODUCIBILITY.md}) covering train / PDM eval / ONNX / TensorRT / C++ parity. As a young single-maintainer release, external stars and forks are still accumulating; the submission emphasizes reproducibility artifacts (self-contained source archive, validated navtest PDM score, Python--C++ parity) so reviewers and new users can adopt and extend the stack. We welcome Issues and PRs.
+
+\medskip
+\noindent\textbf{7. Suggested action editors (no COI):}
+\begin{itemize}
+  \item Editors covering open-source ML software, robotics / autonomous driving systems, or efficient deep learning deployment (please assign per MLOSS board expertise).
+\end{itemize}
+
+\medskip
+\noindent\textbf{8. Suggested reviewers (no COI) --- suggestions by expertise:}
+\begin{itemize}
+  \item Researchers familiar with BEVFusion / multi-sensor BEV perception.
+  \item Maintainers or heavy users of \texttt{spconv} / sparse 3D convolution runtimes.
+  \item NAVSIM / learned planning (Hydra-MDP, GTRS, PDM scoring) practitioners.
+  \item TensorRT / ONNX deployment systems reviewers.
+\end{itemize}
+\noindent\textit{(List concrete names and emails in the portal form when submitting.)}
+
+\medskip
+\noindent\textbf{9. Keywords:} open source software; autonomous driving; bird's-eye view; sparse convolution; TensorRT; NAVSIM
+
+\medskip
+\noindent\textbf{10. Source code.} Source code is included in the submission archive and is publicly available at the project URL under Apache-2.0 (tag \texttt{v0.1.0-mloss}). The archive excludes multi-GB datasets and optional large checkpoints; download instructions and a public checkpoint path are documented in \texttt{REPRODUCIBILITY.md}.
+
+\medskip
+\noindent\textbf{Corresponding author:} Atharv Sharma (\texttt{atharv228.as@gmail.com})
+
+\medskip
+\noindent\textbf{11. Funding disclosure.} None.
+
+\medskip
+\noindent\textbf{12. Competing interests.} None declared.
+
+\medskip
+\noindent\textbf{13. Proprietary dependencies (justification).} The documented C++ inference path requires NVIDIA CUDA and TensorRT, which are proprietary but widely used in the ML systems community (analogous to other accepted GPU MLOSS packages). The LiDAR SCN path does \textbf{not} require NVIDIA's closed \texttt{libspconv}; it uses open \texttt{spconv}~2.x. NAVSIM data is obtained separately under the benchmark's license.
+
+\end{document}

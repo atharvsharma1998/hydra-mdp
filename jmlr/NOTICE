@@ -1,0 +1,50 @@
+NOTICE — SOPHI / hydra-mdp (JMLR MLOSS)
+
+This project is released under the Apache License, Version 2.0.
+See the LICENSE file.
+
+========================================================================
+What this repository redistributes
+========================================================================
+
+1. Original contributions (training, export, deploy, documentation)
+   Copyright (c) 2026 Atharv Sharma
+   Licensed under Apache-2.0.
+
+2. NAVSIM-derived packaging and agent integration
+   Portions adapt the open NAVSIM / nuPlan planning interfaces. Users must
+   obtain NAVSIM and nuPlan map/sensor data under those projects' licenses;
+   datasets are NOT redistributed in the MLOSS submission archive.
+
+3. CUDA-BEVFusion / BEVFusion template
+   Camera LSS, BEVPool plugins, and related runtime components follow
+   NVIDIA's Apache-2.0 CUDA-BEVFusion / Lidar_AI_Solution materials where
+   applicable. SOPHI's documented LiDAR SCN path does NOT require NVIDIA's
+   closed libspconv binary; it executes the exported ONNX SCN graph with
+   open-source spconv 2.x (https://github.com/traveller59/spconv).
+
+4. Hydra-MDP / GTRS-style planning decoder
+   Trajectory vocabulary scoring and PDM-distillation training follow the
+   published Hydra-MDP / GTRS design. Cite those works when using the planner.
+
+========================================================================
+Proprietary dependencies (not redistributed; required at runtime)
+========================================================================
+
+- NVIDIA CUDA toolkit
+- NVIDIA TensorRT 8.6 (documented C++ deploy path)
+
+These are proprietary NVIDIA products that are widely used in the ML systems
+community. The MLOSS paper and cover letter justify this dependency. The open
+claim of this project is the SCN inference path and the full
+train→eval→export→deploy cookbook — not a CUDA/TensorRT-free stack.
+
+========================================================================
+Third-party open-source components
+========================================================================
+
+- spconv (Apache-2.0 / project license as published upstream)
+- PyTorch, OpenMMLab mmcv / mmdet / mmdet3d (their respective licenses)
+- ONNX / onnxruntime (for export validation)
+
+Always verify upstream LICENSE files when redistributing binaries.

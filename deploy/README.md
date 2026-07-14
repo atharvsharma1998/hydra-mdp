@@ -58,6 +58,22 @@ bash deploy/tool/run_gtrs.sh fp16
 (ego status `[24]`). Outputs: console detections/plan, `build/gtrs-bev.jpg`,
 `build/gtrs_seg_256x256_u8.bin`, `build/gtrs_trajectory.txt`.
 
+## Full cookbook (train → PDM → ONNX → TRT → parity)
+
+See [`../docs/REPRODUCIBILITY.md`](../docs/REPRODUCIBILITY.md) and
+[`../../jmlr/REPRODUCIBILITY.md`](../../jmlr/REPRODUCIBILITY.md) for the JMLR MLOSS
+end-to-end recipe. After re-exporting ONNX from a new checkpoint, **delete stale
+`.plan` engines** before `build_gtrs_engines.sh` (the script skips existing plans).
+
+**How the LiDAR ONNX runs in C++** (custom parser vs ONNX Runtime / TensorRT):
+[`../docs/LIDAR_ONNX_CPP_GUIDE.md`](../docs/LIDAR_ONNX_CPP_GUIDE.md).
+
+## Licensing
+
+Deploy sources in this tree are Apache-2.0 (see repo `LICENSE` / `jmlr/NOTICE`).
+CUDA and TensorRT are required at runtime; the LiDAR SCN path uses open
+`spconv` 2.x rather than NVIDIA's closed `libspconv`.
+
 ## Calibration notes (verify on first real run)
 
 * Camera resize convention (roiconvert stretch vs. aspect-preserving crop) must

@@ -36,7 +36,6 @@ $$\text{with}\quad \text{filter}_m(\text{agent}, \text{human}) = \begin{cases}
 1.0 & \text{if } m(\text{human}) = 0 \\
 m(\text{agent}) & \text{otherwise.}
 \end{cases}$$
-<!-- TODO: remove -->
 <!-- Alternatively use: -->
 <!-- $$\text{with}\quad \text{filter}_m(\text{agent}, \text{human}) = \mathbf{1}_{m(\text{human})\neq 0} \cdot m(\text{agent}) + 1.0 \cdot m(\text{human}).$$ -->
 <br>

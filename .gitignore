@@ -69,3 +69,11 @@ Makefile
 # large binary parity dumps (keep the small GT .txt references checked in)
 deploy/parity-data/*.tensor
 deploy/parity-data/*.bin
+
+# JMLR MLOSS build artifacts
+jmlr/submission/
+jmlr/*.aux
+jmlr/*.log
+jmlr/*.bbl
+jmlr/*.blg
+jmlr/*.out
