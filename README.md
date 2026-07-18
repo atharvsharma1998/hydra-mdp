@@ -3,8 +3,8 @@
 Open Apache-2.0 stack for training, evaluating, and deploying an end-to-end
 camera–LiDAR planner on [NAVSIM](https://github.com/autonomousvision/navsim).
 
-A fused BEV feature \(\mathbf{F}_{\mathrm{env}}\) is shared by a Hydra-MDP-style
-trajectory decoder and auxiliary 3D detection + BEV segmentation heads.
+A fused BEV feature `F_env` is shared by a Hydra-MDP-style trajectory decoder
+and auxiliary 3D detection + BEV segmentation heads.
 The LiDAR sparse-convolution (SCN) path runs on open
 [`spconv`](https://github.com/traveller59/spconv) 2.x instead of NVIDIA
 CUDA-BEVFusion’s closed `libspconv` binary.
@@ -63,18 +63,18 @@ Results for checkpoint `gtrs_bevfusion_navtrain_v1_best.pth`.
 |--------|---:|
 | LiDAR (range-crop + open SCN) | 37.8 |
 | Camera (LSS) | 169.8 |
-| Fuser (\(\mathbf{F}_{\mathrm{env}}\)) | 1.6 |
+| Fuser (`F_env`) | 1.6 |
 | Heads (plan + det + seg) | 182.2 |
 | **Total (device)** | **391.3** |
 
 ### Python ↔ C++ parity (token `8bc34517e08758ff`)
 
-| Stage | Cosine | Max \|Δ\| |
-|-------|-------:|----------:|
+| Stage | Cosine | Max abs diff |
+|-------|-------:|-------------:|
 | Trajectory | 1.0000 | 0.0017 m |
 | Agent boxes / class logits | 1.0000 | ~0.066 |
 | BEV semantic logits | 0.9998 | 1.27 |
-| \(\mathbf{F}_{\mathrm{env}}\) | 0.9971 | 0.73 |
+| `F_env` | 0.9971 | 0.73 |
 
 ---
 
