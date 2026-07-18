@@ -1,13 +1,18 @@
-# Quickstart: checkpoint → ONNX → TensorRT → C++ inference
+# Quickstart: `.pth` → Python → ONNX → TensorRT → C++
 
-This is the only path you need for **deploy**. Stay on `main`.
+Stay on `main`. Two smoke tests:
+
+| Path | Needs full NAVSIM? | Entry point |
+|------|--------------------|-------------|
+| **Python** (`.pth`) | OpenScene-**mini** logs + sensors + maps | `scripts/training/viz_gtrs_bevfusion_seg.py` |
+| **C++** (TensorRT) | No — use shipped `deploy/example-data/` | `./build/gtrs_bevfusion …` |
 
 ```bash
 git clone https://github.com/atharvsharma1998/hydra-mdp.git
 cd hydra-mdp
 ```
 
-Training / full NAVSIM PDM scoring: see [`docs/TRAINING.md`](docs/TRAINING.md).
+Full training / `navtest` PDM: [`docs/TRAINING.md`](docs/TRAINING.md).
 
 ---
 
@@ -15,10 +20,10 @@ Training / full NAVSIM PDM scoring: see [`docs/TRAINING.md`](docs/TRAINING.md).
 
 You need:
 
-- Python 3.8 + PyTorch 1.10+cu113 (for ONNX export from `.pth`)
-- TensorRT 8.6 (`trtexec`)
-- Built `libbevfusion_core.so` from a CUDA-BEVFusion fork
-- Built open `libspconv.so`
+- Python 3.8 + PyTorch 1.10+cu113 (Python inference + ONNX export)
+- TensorRT 8.6 (`trtexec`) — C++ path only
+- Built `libbevfusion_core.so` from a CUDA-BEVFusion fork — C++ path only
+- Built open `libspconv.so` — C++ path only
 
 ```bash
 export REPO=$PWD
@@ -56,11 +61,44 @@ mv ~/Downloads/gtrs_bevfusion_navtrain_v1_best.pth $WORKSPACE/checkpoints/
 ```
 
 **Optional shortcut:** if you download the pre-exported ONNX zip from Drive
-into `$WORKSPACE/onnx/`, skip step 2 and go straight to TensorRT.
+into `$WORKSPACE/onnx/`, skip steps 2–3 and go straight to TensorRT (step 4).
 
 ---
 
-## 2. Convert `.pth` → ONNX
+## 2. Python inference (PyTorch `.pth`)
+
+Runs the full model in PyTorch and writes a multi-panel PNG (cameras, dets,
+BEV seg, planned trajectory). Needs OpenScene-**mini** under `$WORKSPACE`
+(not the full navtest set):
+
+```
+$WORKSPACE/
+  maps/
+  mini_navsim_logs/mini/
+  mini_sensor_blobs/mini/
+  checkpoints/gtrs_bevfusion_navtrain_v1_best.pth
+```
+
+```bash
+cd $REPO
+$PYTHON scripts/training/viz_gtrs_bevfusion_seg.py \
+  --workspace $WORKSPACE \
+  --sensor-blobs-path $WORKSPACE/mini_sensor_blobs/mini \
+  --checkpoint $WORKSPACE/checkpoints/gtrs_bevfusion_navtrain_v1_best.pth \
+  --token 8bc34517e08758ff \
+  --eval-mode \
+  --out $WORKSPACE/python_inference.png
+```
+
+- `--eval-mode` — full vocab + running BN (use this for real trajectories)
+- omit `--token` to take the first available mini scene
+- demo GIF in the README was produced this way
+
+If you only care about C++ and already have the Drive ONNX zip, skip this step.
+
+---
+
+## 3. Convert `.pth` → ONNX
 
 ```bash
 cd $REPO
@@ -98,7 +136,7 @@ $WORKSPACE/onnx/
 
 ---
 
-## 3. Convert ONNX → TensorRT (fp16)
+## 4. Convert ONNX → TensorRT (fp16)
 
 Delete any old engines first (the build script skips existing `.plan` files):
 
@@ -114,7 +152,7 @@ TensorRT_Root=$TensorRT_Root \
 
 ---
 
-## 4. Run C++ inference (one-frame sample, no full dataset)
+## 5. Run C++ inference (one-frame sample, no full dataset)
 
 `deploy/example-data/` is included in the repo (~11 MB): cameras, LiDAR points,
 calibration, ego status — same role as CUDA-BEVFusion’s `example-data/`.
@@ -160,8 +198,9 @@ GTRS_DATA=$REPO/deploy/example-data \
 
 ## Checklist
 
-1. [ ] Env vars set (`BEVFUSION_ROOT`, `TensorRT_Root`, `SPCONV_ROOT`, `PYTHON`)
+1. [ ] Env vars set (`PYTHON`; plus `BEVFUSION_ROOT` / `TensorRT_Root` / `SPCONV_ROOT` for C++)
 2. [ ] Checkpoint in `$WORKSPACE/checkpoints/` (or ONNX already in `$WORKSPACE/onnx/`)
-3. [ ] ONNX graphs present
-4. [ ] TensorRT `.plan` engines built
-5. [ ] `./build/gtrs_bevfusion example-data gtrs_bevfusion fp16` runs
+3. [ ] (optional) Python viz PNG from step 2
+4. [ ] ONNX graphs present
+5. [ ] TensorRT `.plan` engines built
+6. [ ] `./build/gtrs_bevfusion example-data gtrs_bevfusion fp16` runs

@@ -12,7 +12,7 @@ CUDA-BEVFusion’s closed `libspconv` binary.
 | | |
 |---|---|
 | **License** | [Apache-2.0](LICENSE) · [NOTICE](NOTICE) |
-| **Install + run (pth → ONNX → TensorRT → C++)** | [`QUICKSTART.md`](QUICKSTART.md) |
+| **Install + run (pth → Python → ONNX → TensorRT → C++)** | [`QUICKSTART.md`](QUICKSTART.md) |
 | **Models (Google Drive)** | [`docs/MODELS.md`](docs/MODELS.md) |
 | **Training / PDM eval** | [`docs/TRAINING.md`](docs/TRAINING.md) |
 | **MLOSS write-up** | [`jmlr/`](jmlr/) |
@@ -78,23 +78,21 @@ Results for checkpoint `gtrs_bevfusion_navtrain_v1_best.pth`.
 
 ---
 
-## Clone and run (one sample, no full NAVSIM download)
-
-The repo ships `deploy/example-data/` — one preprocessed frame (same idea as
-CUDA-BEVFusion’s `example-data/`). After you download weights/ONNX from Drive
-and build TensorRT engines, you can run C++ inference without the full dataset.
+## Clone and run
 
 ```bash
 git clone https://github.com/atharvsharma1998/hydra-mdp.git
 cd hydra-mdp
-# stay on main
-
-# follow the short path:
-#   QUICKSTART.md  →  env → download models → ONNX (or use Drive ONNX)
-#                   → TensorRT → C++ on deploy/example-data
+# stay on main → see QUICKSTART.md
 ```
 
-See **[`QUICKSTART.md`](QUICKSTART.md)** for the full copy-paste sequence.
+| Smoke test | Data needed |
+|------------|-------------|
+| **Python** `.pth` viz | OpenScene-mini (logs + sensors + maps) |
+| **C++** TensorRT | none — shipped `deploy/example-data/` (~11 MB) |
+
+Full copy-paste sequence: **[`QUICKSTART.md`](QUICKSTART.md)**  
+(`pth` → Python viz → ONNX → TensorRT → C++).
 
 ---
 
@@ -122,7 +120,7 @@ scripts/training/               # train + viz
 scripts/export/                 # ONNX export + parity compare
 deploy/                         # C++/TensorRT + example-data/
 docs/                           # models, training, SCN notes
-QUICKSTART.md                   # pth → ONNX → TRT → C++
+QUICKSTART.md                   # pth → Python → ONNX → TRT → C++
 jmlr/                           # short MLOSS software description
 ```
 

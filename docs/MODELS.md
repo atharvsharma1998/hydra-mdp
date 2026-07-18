@@ -4,10 +4,11 @@ Large weights are hosted on Google Drive (not in git).
 
 | Artifact | File | Google Drive |
 |----------|------|--------------|
-| PyTorch checkpoint (navtrain → navtest PDM 0.7925) | `gtrs_bevfusion_navtrain_v1_best.pth` | **[PASTE_DRIVE_LINK_PTH]** |
-| ONNX graphs (optional shortcut; skip `.pth`→ONNX export) | `gtrs_bevfusion_onnx_navtrain_v1.tar.gz` | **[PASTE_DRIVE_LINK_ONNX]** |
+| PyTorch checkpoint (navtrain → navtest PDM 0.7925) | `gtrs_bevfusion_navtrain_v1_best.pth` | [Drive folder](https://drive.google.com/drive/folders/1hcnOaJvWhL3hzBxSSsUlCLYQ8InSOYGE?usp=sharing) |
+| ONNX graphs (optional shortcut; skip `.pth`→ONNX export) | `gtrs_bevfusion_onnx_navtrain_v1.tar.gz` | [Drive folder](https://drive.google.com/drive/folders/1hcnOaJvWhL3hzBxSSsUlCLYQ8InSOYGE?usp=sharing) |
 
-> Replace the two placeholders above with your shareable Drive links before publishing.
+Both files live in the same shared folder:  
+https://drive.google.com/drive/folders/1hcnOaJvWhL3hzBxSSsUlCLYQ8InSOYGE?usp=sharing
 
 ## After download
 

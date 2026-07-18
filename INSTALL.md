@@ -1,7 +1,7 @@
 # Install
 
 Use **[`QUICKSTART.md`](QUICKSTART.md)** — it covers environment setup and the full
-`pth → ONNX → TensorRT → C++` path on `main`.
+`pth → Python → ONNX → TensorRT → C++` path on `main`.
 
 ```bash
 git clone https://github.com/atharvsharma1998/hydra-mdp.git
