@@ -1,6 +1,6 @@
 # How the LiDAR Backbone ONNX Runs in C++
 
-A plain-language guide to SOPHI’s **open SCN path**: why we don’t use ONNX Runtime / TensorRT for LiDAR, what a “custom ONNX interpreter” is, and how ours is written and executed.
+A plain-language guide to this project’s **open SCN path**: why we don’t use ONNX Runtime / TensorRT for LiDAR, what a “custom ONNX interpreter” is, and how ours is written and executed.
 
 **Code map**
 
@@ -258,7 +258,7 @@ You **are** writing a **domain-specific executor** for one exported SCN graph, s
 
 ---
 
-## 8. Where this sits in the full SOPHI stack
+## 8. Where this sits in the full stack
 
 ```text
 ┌─────────────────────────────────────────────────────────┐

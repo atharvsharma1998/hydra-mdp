@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Build a JMLR MLOSS source archive (no .git, no checkpoints, no multi-GB data).
-# Run from anywhere; writes jmlr/submission/sophi_v0.1.0-mloss.tar.gz
+# Includes deploy/example-data/ (one frame) for clone-and-run C++ inference.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,7 +15,7 @@ else
   echo "ERROR: cannot locate navsim repo root from $ROOT"; exit 1
 fi
 OUT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/submission"
-STAGE="$OUT_DIR/sophi_v0.1.0-mloss"
+STAGE="$OUT_DIR/sparse_conv_hydra_mdp"
 TAG="v0.1.0-mloss"
 ARCHIVE="$OUT_DIR/${TAG}.tar.gz"
 

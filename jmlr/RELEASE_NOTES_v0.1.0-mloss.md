@@ -1,28 +1,19 @@
 # Release notes — v0.1.0-mloss
 
-JMLR MLOSS candidate release of SOPHI / GTRS-BEVFusion open stack.
+Open-source release: **Sparse-conv Offline Perception with Hydra-MDP Inference**
+(JMLR MLOSS software-description candidate).
+
+Branch: `main` (tag optional).
 
 ## Highlights
 
-- Open LiDAR SCN inference via spconv 2.x (replaces closed NVIDIA libspconv path)
-- Multi-head ONNX/TensorRT deploy: planning + detection + BEV segmentation
-- Train / PDM eval / export / C++ parity cookbook: `jmlr/REPRODUCIBILITY.md`
-- Validated navtest PDM **0.7925** (12,149 scenarios)
-- Python↔C++ trajectory max |Δ| **0.0017 m** (cosine 1.000)
+- Open `spconv` 2.x SCN path (no closed `libspconv`)
+- Multi-head ONNX + FP16 TensorRT + C++ deploy
+- `deploy/example-data/` one-frame sample for clone-and-run inference
+- NAVSIM `navtest` PDM 0.7925 for `gtrs_bevfusion_navtrain_v1_best.pth`
 
-## License
+## Docs
 
-Apache-2.0. See `LICENSE` and `NOTICE` for CUDA/TensorRT and dataset boundaries.
-
-## Tag commands
-
-```bash
-cd /path/to/hydra-mdp   # navsim repo root
-git add -A   # after reviewing
-git commit -m "docs: JMLR MLOSS paper, reproducibility cookbook, NOTICE"
-git tag -a v0.1.0-mloss -m "JMLR MLOSS release v0.1.0-mloss"
-git push origin HEAD
-git push origin v0.1.0-mloss
-```
-
-Do **not** push until paper/docs commits are reviewed.
+- User path: [`../QUICKSTART.md`](../QUICKSTART.md)
+- Models (Drive): [`../docs/MODELS.md`](../docs/MODELS.md)
+- Paper folder: this `jmlr/` directory

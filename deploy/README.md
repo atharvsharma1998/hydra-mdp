@@ -58,12 +58,13 @@ bash deploy/tool/run_gtrs.sh fp16
 (ego status `[24]`). Outputs: console detections/plan, `build/gtrs-bev.jpg`,
 `build/gtrs_seg_256x256_u8.bin`, `build/gtrs_trajectory.txt`.
 
-## Full cookbook (train → PDM → ONNX → TRT → parity)
+## Full cookbook
 
-See [`../docs/REPRODUCIBILITY.md`](../docs/REPRODUCIBILITY.md) and
-[`../../jmlr/REPRODUCIBILITY.md`](../../jmlr/REPRODUCIBILITY.md) for the JMLR MLOSS
-end-to-end recipe. After re-exporting ONNX from a new checkpoint, **delete stale
-`.plan` engines** before `build_gtrs_engines.sh` (the script skips existing plans).
+Deploy path: [`../QUICKSTART.md`](../QUICKSTART.md) (`pth → ONNX → TRT → C++`).
+Shipped sample: [`example-data/`](example-data/) (no full NAVSIM download).
+
+After re-exporting ONNX from a new checkpoint, **delete stale `.plan` engines**
+before `build_gtrs_engines.sh` (the script skips existing plans).
 
 **How the LiDAR ONNX runs in C++** (custom parser vs ONNX Runtime / TensorRT):
 [`../docs/LIDAR_ONNX_CPP_GUIDE.md`](../docs/LIDAR_ONNX_CPP_GUIDE.md).

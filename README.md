@@ -1,89 +1,116 @@
-# SOPHI
-
-**Sparse-conv Offline Perception with Hydra-distillation Inference**
+# Sparse-conv Offline Perception with Hydra-MDP Inference
 
 Open Apache-2.0 stack for training, evaluating, and deploying an end-to-end
 camera–LiDAR planner on [NAVSIM](https://github.com/autonomousvision/navsim).
+
 A fused BEV feature \(\mathbf{F}_{\mathrm{env}}\) is shared by a Hydra-MDP-style
 trajectory decoder and auxiliary 3D detection + BEV segmentation heads.
-The LiDAR sparse-convolution (SCN) path runs on open [`spconv`](https://github.com/traveller59/spconv) 2.x
-instead of NVIDIA CUDA-BEVFusion’s closed `libspconv` binary.
+The LiDAR sparse-convolution (SCN) path runs on open
+[`spconv`](https://github.com/traveller59/spconv) 2.x instead of NVIDIA
+CUDA-BEVFusion’s closed `libspconv` binary.
 
 | | |
 |---|---|
-| **Paper (JMLR MLOSS)** | [`jmlr/bevfusion_planner.pdf`](jmlr/bevfusion_planner.pdf) |
-| **Version tag** | [`v0.1.0-mloss`](https://github.com/atharvsharma1998/hydra-mdp/releases) |
 | **License** | [Apache-2.0](LICENSE) · [NOTICE](NOTICE) |
-| **Install** | [`INSTALL.md`](INSTALL.md) |
-| **Models / ONNX** | [`docs/MODELS.md`](docs/MODELS.md) |
-| **Deploy (export → TRT → C++)** | [`docs/DEPLOY.md`](docs/DEPLOY.md) |
-| **Full cookbook** | [`docs/REPRODUCIBILITY.md`](docs/REPRODUCIBILITY.md) |
-
-**Validated results (checkpoint `gtrs_bevfusion_navtrain_v1_best.pth`):**
-- NAVSIM `navtest` PDM **0.7925** (12,149 scenarios; NC 0.982, DAC 0.975, TTC 0.981)
-- C++ FP16 end-to-end ≈ **391 ms** device time on RTX 3060 (open SCN ≈ 38 ms)
-- Python ↔ C++ trajectory max |Δ| **0.0017 m** (cosine 1.000)
+| **Install + run (pth → ONNX → TensorRT → C++)** | [`QUICKSTART.md`](QUICKSTART.md) |
+| **Models (Google Drive)** | [`docs/MODELS.md`](docs/MODELS.md) |
+| **Training / PDM eval** | [`docs/TRAINING.md`](docs/TRAINING.md) |
+| **MLOSS write-up** | [`jmlr/`](jmlr/) |
 
 <p align="center">
-  <img src="assets/demo/sophi_navtrain_v1.gif" width="720"
-       alt="SOPHI Python inference on mini (det + BEV seg + planned trajectory)">
+  <img src="assets/demo/hydra_mdp_inference_demo.gif" width="720"
+       alt="Inference demo: detection, BEV segmentation, planned trajectory">
   <br/>
-  <em>Python inference demo (eval mode) on OpenScene-mini; solid = GT, dashed = predicted.</em>
+  <em>Inference demo on a mini scene (solid = GT, dashed = predicted).</em>
 </p>
 
 ---
 
-## Why this repo exists
+## Why this exists
 
 NVIDIA’s [CUDA-BEVFusion](https://github.com/NVIDIA-AI-IOT/Lidar_AI_Solution) is a strong detection runtime, but:
 
 1. the LiDAR SCN depends on a **non-redistributable** `libspconv`,
 2. the reference exports **detection only** (no planning / BEV seg),
-3. there is no documented NAVSIM train → PDM eval → ONNX/TensorRT → C++ path.
+3. there is no documented NAVSIM train → eval → ONNX/TensorRT → C++ path.
 
-SOPHI fills that gap so you can **train your own model**, score it with official
-NAVSIM PDM evaluation, and deploy with open SCN + TensorRT.
-
-This is a **software / systems** release: we reuse BEVFusion fusion and a
-Hydra-MDP/GTRS-style scorer; the contribution is the open SCN runtime, multi-head
-deploy graph, and end-to-end recipe.
+This project fills that gap so you can train your own model, score it with
+official NAVSIM PDM evaluation, and deploy with open SCN + TensorRT.
 
 ---
 
-## Quick start
+## Benchmarks
+
+Results for checkpoint `gtrs_bevfusion_navtrain_v1_best.pth`.
+
+### NAVSIM `navtest` (12,149 scenarios)
+
+| Metric | Score |
+|--------|------:|
+| **PDM (overall)** | **0.7925** |
+| No-at-fault collision (NC) | 0.982 |
+| Drivable-area compliance (DAC) | 0.975 |
+| Time-to-collision (TTC) | 0.981 |
+| Ego progress (EP) | 0.854 |
+| Driving-direction compliance | 0.996 |
+| Traffic-light compliance | 0.998 |
+| Lane keeping | 0.970 |
+| History comfort | 0.964 |
+
+### C++ FP16 latency (RTX 3060 12 GB)
+
+| Module | ms |
+|--------|---:|
+| LiDAR (range-crop + open SCN) | 37.8 |
+| Camera (LSS) | 169.8 |
+| Fuser (\(\mathbf{F}_{\mathrm{env}}\)) | 1.6 |
+| Heads (plan + det + seg) | 182.2 |
+| **Total (device)** | **391.3** |
+
+### Python ↔ C++ parity (token `8bc34517e08758ff`)
+
+| Stage | Cosine | Max \|Δ\| |
+|-------|-------:|----------:|
+| Trajectory | 1.0000 | 0.0017 m |
+| Agent boxes / class logits | 1.0000 | ~0.066 |
+| BEV semantic logits | 0.9998 | 1.27 |
+| \(\mathbf{F}_{\mathrm{env}}\) | 0.9971 | 0.73 |
+
+---
+
+## Clone and run (one sample, no full NAVSIM download)
+
+The repo ships `deploy/example-data/` — one preprocessed frame (same idea as
+CUDA-BEVFusion’s `example-data/`). After you download weights/ONNX from Drive
+and build TensorRT engines, you can run C++ inference without the full dataset.
 
 ```bash
 git clone https://github.com/atharvsharma1998/hydra-mdp.git
 cd hydra-mdp
-git checkout v0.1.0-mloss   # reviewed MLOSS version
+# stay on main
+
+# follow the short path:
+#   QUICKSTART.md  →  env → download models → ONNX (or use Drive ONNX)
+#                   → TensorRT → C++ on deploy/example-data
 ```
 
-1. [`INSTALL.md`](INSTALL.md) — environment, maps, data layout  
-2. [`docs/MODELS.md`](docs/MODELS.md) — download PyTorch checkpoint + ONNX bundle  
-3. [`docs/DEPLOY.md`](docs/DEPLOY.md) — export (optional) → TensorRT → **C++ inference**  
-4. [`docs/REPRODUCIBILITY.md`](docs/REPRODUCIBILITY.md) — metric cache, train, PDM scoring  
+See **[`QUICKSTART.md`](QUICKSTART.md)** for the full copy-paste sequence.
 
-### Python inference
+---
 
-```bash
-export BEVFUSION_ROOT=/path/to/CUDA-BEVFusion/bevfusion
-export NUPLAN_MAPS_ROOT=/path/to/maps
-export PYTHONPATH=$PWD:$PWD/scripts/training:$PYTHONPATH
+## Roadmap / TODO
 
-python scripts/training/viz_gtrs_bevfusion_seg.py \
-  --sensor-blobs-path /path/to/mini_sensor_blobs/mini \
-  --checkpoint /path/to/gtrs_bevfusion_navtrain_v1_best.pth \
-  --out /tmp/sophi_viz.png \
-  --eval-mode --show-gt-boxes --num-frames 6
-```
-
-### C++ inference (after TensorRT engines are built)
-
-```bash
-cd deploy
-./build/gtrs_bevfusion parity-data gtrs_bevfusion fp16 parity-data/cpp
-# see docs/DEPLOY.md for export + engine build
-```
+- [x] Open SCN runtime (`spconv` 2.x) replacing closed `libspconv`
+- [x] Multi-head ONNX export (planning + detection + BEV segmentation)
+- [x] FP16 TensorRT engines + C++ deploy binary
+- [x] One-frame `deploy/example-data/` for clone-and-run inference
+- [x] NAVSIM `navtest` PDM evaluation (0.7925)
+- [x] Python ↔ C++ stage parity
+- [ ] **INT8 quantization** for TensorRT engines (latency / accuracy study)
+- [ ] Faster eval path (trajectory cache + CPU-only PDM scoring)
+- [ ] Ego-progress calibration (EP is the main soft spot at 0.854)
+- [ ] Two-stage / navhard EPDMS evaluation
+- [ ] Broader install testing (CUDA / TensorRT version matrix)
 
 ---
 
@@ -91,94 +118,45 @@ cd deploy
 
 ```
 navsim/agents/gtrs_bevfusion/   # PyTorch model, losses, features
-scripts/training/               # train_gtrs_bevfusion.py, viz_*.py
-scripts/export/                 # ONNX export + compare_cpp_parity.py
-deploy/                         # C++/CUDA + TensorRT engines + parity-data
-docs/                           # install, agents, metrics, REPRODUCIBILITY.md
-jmlr/                           # MLOSS paper sources + cover letter
-cloud/                          # multi-GPU training helpers
+scripts/training/               # train + viz
+scripts/export/                 # ONNX export + parity compare
+deploy/                         # C++/TensorRT + example-data/
+docs/                           # models, training, SCN notes
+QUICKSTART.md                   # pth → ONNX → TRT → C++
+jmlr/                           # short MLOSS software description
 ```
-
-Hydra agent config for official scoring:
-`navsim/planning/script/config/common/agent/gtrs_bevfusion_agent.yaml`
 
 ---
 
-## End-to-end workflow
-
-```
-NAVSIM data  →  metric cache  →  train  →  PDM score (navtest)
-                                 ↓
-                         ONNX export (+ SCN)
-                                 ↓
-                    TensorRT .plan engines (fp16)
-                                 ↓
-              C++ gtrs_bevfusion  →  parity vs PyTorch
-```
-
-Full copy-paste commands: [`docs/REPRODUCIBILITY.md`](docs/REPRODUCIBILITY.md).
-
----
-
-## Licensing and dependencies
+## Licensing
 
 | Component | Status |
 |-----------|--------|
-| This repository (train / export / deploy / docs) | **Apache-2.0** |
+| This repository | **Apache-2.0** |
 | Open `spconv` SCN runtime | Open source |
-| CUDA-BEVFusion camera / BEVPool template | NVIDIA Apache-2.0; **closed `libspconv` replaced** |
-| CUDA + TensorRT 8.6 | Proprietary NVIDIA runtime (required for documented C++ path) |
-| NAVSIM / nuPlan / OpenScene data | Separate dataset licenses — download yourself |
+| CUDA-BEVFusion camera / BEVPool template | NVIDIA Apache-2.0; closed `libspconv` **replaced** |
+| CUDA + TensorRT 8.6 | Proprietary NVIDIA runtime (required for C++ path) |
+| NAVSIM / nuPlan / OpenScene data | Separate licenses (only needed for train/full eval) |
 
-See [`NOTICE`](NOTICE) for redistributable boundaries. We do **not** claim a
-fully proprietary-free stack; the open claim is the **SCN path + full planning/seg deploy recipe**.
+See [`NOTICE`](NOTICE).
 
 ---
 
 ## Citation
 
-If you use SOPHI, please cite the JMLR MLOSS paper (update volume/pages after acceptance)
-and the upstream benchmarks it builds on:
-
 ```bibtex
-@article{Sharma2026SOPHI,
-  title   = {SOPHI: An Open End-to-End Camera--LiDAR Planning Stack
-             with Sparse-Convolution Inference for {NAVSIM}},
-  author  = {Sharma, Atharv},
-  journal = {Journal of Machine Learning Research (MLOSS)},
-  year    = {2026},
-  note    = {Software available at https://github.com/atharvsharma1998/hydra-mdp},
+@software{Sharma2026SparseConvHydraMDP,
+  title  = {Sparse-conv Offline Perception with Hydra-{MDP} Inference},
+  author = {Sharma, Atharv},
+  year   = {2026},
+  url    = {https://github.com/atharvsharma1998/hydra-mdp},
+  note   = {Open-source camera--LiDAR planning stack for NAVSIM},
 }
 ```
 
-Upstream (please also cite when using NAVSIM evaluation):
+Based on the open [NAVSIM](https://github.com/autonomousvision/navsim) devkit
+(Apache-2.0). Please also cite NAVSIM / Hydra-MDP / BEVFusion when using those pieces.
 
-```bibtex
-@inproceedings{Dauner2024NEURIPS,
-  title  = {NAVSIM: Data-Driven Non-Reactive Autonomous Vehicle Simulation and Benchmarking},
-  author = {Dauner, Daniel and Hallgarten, Marcel and Li, Tianyu and Weng, Xinshuo
-            and Huang, Zhiyu and Yang, Zetong and Li, Hongyang and Gilitschenski, Igor
-            and Ivanovic, Boris and Pavone, Marco and Geiger, Andreas and Chitta, Kashyap},
-  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
-  year = {2024},
-}
-```
+## Issues
 
----
-
-## Relationship to upstream NAVSIM
-
-This repository is based on the open [NAVSIM](https://github.com/autonomousvision/navsim)
-devkit (Apache-2.0) and adds the SOPHI / GTRS-BEVFusion agent, training, ONNX export,
-and C++/TensorRT deploy stack. For the original NAVSIM challenge docs
-(agents, splits, metrics, leaderboard), see [`docs/`](docs/) and the
-[upstream project](https://github.com/autonomousvision/navsim).
-
----
-
-## Issues and contributions
-
-Open a [GitHub issue](https://github.com/atharvsharma1998/hydra-mdp/issues) for bugs
-or questions. Pull requests that improve install docs, parity tests, or deploy portability
-are welcome. Contribution notes and developer pointers are in
-[`docs/REPRODUCIBILITY.md`](docs/REPRODUCIBILITY.md) (“Extending the stack”).
+[GitHub Issues](https://github.com/atharvsharma1998/hydra-mdp/issues) for bugs and questions.
